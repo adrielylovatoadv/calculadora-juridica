@@ -759,6 +759,289 @@ def export_word(process_info: dict, rows: list, summary: dict) -> BytesIO:
     return buf
 
 
+def export_pdf(process_info: dict, rows: list, summary: dict) -> BytesIO:
+    from reportlab.platypus import (
+        SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable,
+    )
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
+
+    IS_INIC = process_info.get("modo") == "inicial"
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=(21 * cm, 29.7 * cm),
+        leftMargin=2.5 * cm,
+        rightMargin=2.5 * cm,
+        topMargin=2.5 * cm,
+        bottomMargin=2.0 * cm,
+    )
+
+    DARK_BLUE  = colors.HexColor("#1A3A6B")
+    MED_BLUE   = colors.HexColor("#2C5282")
+    LIGHT_BLUE = colors.HexColor("#BEE3F8")
+    ROW_EVEN   = colors.HexColor("#EBF4FF")
+    WHITE      = colors.white
+    BLACK      = colors.black
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "PdfTitle",
+        parent=styles["Title"],
+        fontName="Helvetica-Bold",
+        fontSize=14,
+        textColor=DARK_BLUE,
+        alignment=TA_CENTER,
+        spaceAfter=4,
+    )
+    subtitle_style = ParagraphStyle(
+        "PdfSubtitle",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=11,
+        textColor=MED_BLUE,
+        alignment=TA_CENTER,
+        spaceAfter=10,
+    )
+    section_style = ParagraphStyle(
+        "PdfSection",
+        parent=styles["Heading2"],
+        fontName="Helvetica-Bold",
+        fontSize=11,
+        textColor=DARK_BLUE,
+        spaceBefore=8,
+        spaceAfter=4,
+    )
+    body_style = ParagraphStyle(
+        "PdfBody",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=9,
+        spaceAfter=3,
+    )
+    bullet_style = ParagraphStyle(
+        "PdfBullet",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=8,
+        leftIndent=12,
+        firstLineIndent=-8,
+        spaceAfter=3,
+    )
+
+    story = []
+
+    titulo = "PLANILHA DE DÉBITOS JUDICIAIS" if IS_INIC else "DEMONSTRATIVO DE DÉBITO"
+    subtit = "PETIÇÃO INICIAL — DIREITO DO CONSUMIDOR" if IS_INIC else "CUMPRIMENTO DE SENTENÇA / EXECUÇÃO"
+    story.append(Paragraph(titulo, title_style))
+    story.append(Paragraph(subtit, subtitle_style))
+    story.append(Spacer(1, 4))
+
+    # ── Dados do processo ──
+    lbl_parte = "Requerente:" if IS_INIC else "Exequente:"
+    lbl_reu   = "Requerida:"  if IS_INIC else "Executado:"
+    process_fields = [
+        ("Número do Processo:", process_info.get("numero_processo", "")),
+        (lbl_parte,             process_info.get("exequente", "")),
+        (lbl_reu,               process_info.get("executado", "")),
+        ("Tribunal:",           process_info.get("tribunal", "")),
+        ("Data do Cálculo:",    process_info.get("data_calculo", "")),
+    ]
+    ptbl_data = [
+        [
+            Paragraph(f"<b><font color='white'>{lbl}</font></b>", body_style),
+            Paragraph(val, body_style),
+        ]
+        for lbl, val in process_fields
+    ]
+    ptbl = Table(ptbl_data, colWidths=[4.5 * cm, 11.5 * cm])
+    ptbl.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (0, -1), MED_BLUE),
+        ("BACKGROUND", (1, 0), (1, -1), WHITE),
+        ("GRID",       (0, 0), (-1, -1), 0.3, colors.grey),
+        ("VALIGN",     (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING",    (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    story.append(ptbl)
+    story.append(Spacer(1, 10))
+
+    # ── Tabela de lançamentos ──
+    story.append(Paragraph("LANÇAMENTOS", section_style))
+
+    tbl_headers = [
+        "Data da\nCobrança",
+        "Valor\nOriginal (R$)",
+        "Fator de\nCorreção",
+        "Débito\nCorrigido (R$)",
+        "Juros\nTotal %",
+        "Valor dos\nJuros (R$)",
+        "Débito\nTotal (R$)",
+    ]
+
+    hdr_cells = [
+        Paragraph(f"<b><font color='white'>{h}</font></b>", ParagraphStyle(
+            "ch", fontName="Helvetica-Bold", fontSize=7, alignment=TA_CENTER,
+            textColor=WHITE, leading=9,
+        ))
+        for h in tbl_headers
+    ]
+    charges_data = [hdr_cells]
+    for ri, r in enumerate(rows):
+        vals = [
+            r.get("Data da Cobrança", ""),
+            fmt_brl(r.get("Valor Original", 0.0)),
+            fmt_factor(r.get("Fator de Correção", 1.0)),
+            fmt_brl(r.get("Débito Corrigido", 0.0)),
+            fmt_pct(r.get("Total Juros %", 0.0)),
+            fmt_brl(r.get("Valor dos Juros", 0.0)),
+            fmt_brl(r.get("Débito Total", 0.0)),
+        ]
+        aligns = [TA_CENTER] + [TA_RIGHT] * 6
+        charges_data.append([
+            Paragraph(v, ParagraphStyle("cd", fontName="Helvetica", fontSize=7,
+                                        alignment=a, leading=9))
+            for v, a in zip(vals, aligns)
+        ])
+
+    col_w = [2.3 * cm, 2.1 * cm, 2.0 * cm, 2.3 * cm, 2.0 * cm, 2.1 * cm, 2.2 * cm]
+    charges_tbl = Table(charges_data, colWidths=col_w, repeatRows=1)
+    ts = [
+        ("BACKGROUND", (0, 0), (-1, 0), DARK_BLUE),
+        ("GRID",       (0, 0), (-1, -1), 0.3, colors.grey),
+        ("VALIGN",     (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING",    (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+    ]
+    for ri in range(len(rows)):
+        bg = ROW_EVEN if ri % 2 == 0 else WHITE
+        ts.append(("BACKGROUND", (0, ri + 1), (-1, ri + 1), bg))
+    charges_tbl.setStyle(TableStyle(ts))
+    story.append(charges_tbl)
+    story.append(Spacer(1, 10))
+
+    # ── Resumo ──
+    story.append(Paragraph("RESUMO DO CÁLCULO", section_style))
+
+    if IS_INIC:
+        sum_rows_data = [
+            ("( = ) Subtotal — Débito Corrigido (Principal):", fmt_brl(summary["subtotal_principal"])),
+            ("( = ) Subtotal — Juros Moratórios:",             fmt_brl(summary["subtotal_juros"])),
+            ("( = ) Subtotal Material (Corrigido + Juros):",   fmt_brl(summary["subtotal_base"])),
+        ]
+        if summary.get("aplicar_dobro"):
+            sum_rows_data.append((
+                "( × ) Repetição em dobro — CDC art. 42, §único:",
+                f"{fmt_brl(summary['subtotal_base'])} × 2 = {fmt_brl(summary['subtotal_material'])}"
+            ))
+        if summary.get("dano_moral", 0) > 0:
+            sum_rows_data.append(("( + ) Dano Moral:", fmt_brl(summary["dano_moral"])))
+        sum_rows_data.append(("VALOR DA CAUSA:", fmt_brl(summary["total_geral"])))
+        total_label = "VALOR DA CAUSA:"
+    else:
+        sp = summary["subtotal_principal"]
+        sj = summary["subtotal_juros"]
+        sb = sp + sj
+        hp = summary["honorarios_pct"]
+        hv = summary["honorarios_valor"]
+        hp_p = sp * hp / 100.0
+        hp_j = sj * hp / 100.0
+        sp2 = sp + hp_p
+        sj2 = sj + hp_j
+        sum_rows_data = [
+            ("( = ) Subtotal (principal):", f"{fmt_brl(sp)} + (juros) {fmt_brl(sj)}   {fmt_brl(sb)}"),
+            (f"( + ) Honorários advocatícios {hp:.2f}%:", f"{fmt_brl(hp_p)} + - {fmt_brl(hp_j)}   {fmt_brl(hv)}"),
+            ("( = ) Subtotal (principal):", f"{fmt_brl(sp2)} + (juros) {fmt_brl(sj2)}   {fmt_brl(sp2+sj2)}"),
+        ]
+        if summary.get("multa_523"):
+            mv = summary["multa_valor"]
+            mp = sp2 * 0.10
+            mj = sj2 * 0.10
+            sum_rows_data.append((
+                "( + ) Honorários Art. 523, §1º CPC 10%:", f"{fmt_brl(mp)} + - {fmt_brl(mj)}   {fmt_brl(mv)}"
+            ))
+            sum_rows_data.append((
+                "( = ) Total (principal):", f"{fmt_brl(sp2+mp)} + (juros) {fmt_brl(sj2+mj)}   {fmt_brl(summary['total_geral'])}"
+            ))
+        sum_rows_data.append(("TOTAL GERAL:", fmt_brl(summary["total_geral"])))
+        total_label = "TOTAL GERAL:"
+
+    sum_pdf_data = []
+    for lbl, val in sum_rows_data:
+        is_total = (lbl == total_label)
+        bg_color = DARK_BLUE if is_total else LIGHT_BLUE
+        txt_color = "white" if is_total else "black"
+        sum_pdf_data.append([
+            Paragraph(f"<b><font color='{txt_color}'>{lbl}</font></b>",
+                      ParagraphStyle("sl", fontName="Helvetica-Bold", fontSize=9,
+                                     textColor=(WHITE if is_total else BLACK))),
+            Paragraph(f"<b><font color='{txt_color}'>{val}</font></b>",
+                      ParagraphStyle("sv", fontName="Helvetica-Bold", fontSize=9,
+                                     alignment=TA_RIGHT,
+                                     textColor=(WHITE if is_total else BLACK))),
+        ])
+
+    sum_style = []
+    for si, (lbl, _) in enumerate(sum_rows_data):
+        is_total = (lbl == total_label)
+        bg_color = DARK_BLUE if is_total else LIGHT_BLUE
+        sum_style.append(("BACKGROUND", (0, si), (-1, si), bg_color))
+    sum_style += [
+        ("GRID",    (0, 0), (-1, -1), 0.3, colors.grey),
+        ("VALIGN",  (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING",    (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]
+    stbl = Table(sum_pdf_data, colWidths=[11 * cm, 5 * cm])
+    stbl.setStyle(TableStyle(sum_style))
+    story.append(stbl)
+    story.append(Spacer(1, 10))
+
+    # ── Critérios ──
+    story.append(Paragraph("CRITÉRIOS UTILIZADOS", section_style))
+    criterios = [
+        "Atualização Monetária: INPC (IBGE, série BCB 188) de julho/1995 a agosto/2024; "
+        "IPCAe (série BCB 10764) de setembro/2024 em diante.",
+        "Juros de Mora: 0,5% ao mês até dezembro/2002; 1% ao mês de janeiro/2003 a agosto/2024; "
+        "Taxa Selic mensal (BCB, série 4390) de setembro/2024 em diante (Lei 14.905/2024).",
+        "Juros calculados sobre o débito corrigido — regime de juros simples (não composto).",
+        f"Tribunal: {process_info.get('tribunal', 'TJMG')}.",
+    ]
+    if IS_INIC and summary.get("aplicar_dobro"):
+        criterios.append(
+            "Repetição em dobro aplicada nos termos do CDC art. 42, §único "
+            "(EAREsp 676.608/RS — STJ, independe de comprovação de má-fé)."
+        )
+    for text in criterios:
+        story.append(Paragraph(f"• {text}", bullet_style))
+
+    story.append(Spacer(1, 20))
+
+    # ── Assinatura ──
+    loc_line = (
+        f"Local: {process_info.get('tribunal','')} — {process_info.get('data_calculo', '')}."
+        if not IS_INIC else
+        f"Local e data: _________________________, {process_info.get('data_calculo', '')}."
+    )
+    story.append(Paragraph(loc_line, body_style))
+    story.append(Spacer(1, 20))
+    story.append(HRFlowable(width="60%", thickness=0.5, color=BLACK, hAlign="CENTER"))
+    story.append(Spacer(1, 4))
+
+    assinante = process_info.get("assinante_nome") or "Advogado(a) — OAB/_____ n.º _______"
+    cargo     = process_info.get("assinante_cargo") or ("Subscritor do Cálculo" if IS_INIC else "Cargo / Função")
+    sig_style = ParagraphStyle("sig", fontName="Helvetica", fontSize=9, alignment=TA_CENTER)
+    story.append(Paragraph(assinante, sig_style))
+    story.append(Paragraph(cargo, sig_style))
+
+    doc.build(story)
+    buf.seek(0)
+    return buf
+
+
 # ──────────────────────────────────────────────────────────────
 # EXTRAÇÃO DE TEXTO E PARSING DE DOCUMENTOS
 # ──────────────────────────────────────────────────────────────
@@ -1929,14 +2212,14 @@ safe_num = (numero_processo or "processo").replace("/", "_").replace(".", "_").r
 date_str  = data_calculo.strftime("%Y%m%d")
 modo_str  = "inicial" if IS_INICIAL else "execucao"
 
-exp_col1, exp_col2, exp_col3 = st.columns(3)
+exp_col1, exp_col2, exp_col3, exp_col4 = st.columns(4)
 
 with exp_col1:
     try:
         from docx import Document as _Doc  # noqa
         word_buf = export_word(process_info_export, export_rows, summary_export)
         st.download_button(
-            label="📄  Exportar para Word (.docx)",
+            label="📄  Exportar Word (.docx)",
             data=word_buf,
             file_name=f"calculo_{modo_str}_{safe_num}_{date_str}.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -1952,7 +2235,7 @@ with exp_col2:
         import openpyxl as _xl  # noqa
         excel_buf = export_excel(process_info_export, export_rows, summary_export)
         st.download_button(
-            label="📊  Exportar para Excel (.xlsx)",
+            label="📊  Exportar Excel (.xlsx)",
             data=excel_buf,
             file_name=f"calculo_{modo_str}_{safe_num}_{date_str}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1964,6 +2247,22 @@ with exp_col2:
         st.error(f"Erro Excel: {e}")
 
 with exp_col3:
+    try:
+        from reportlab.platypus import SimpleDocTemplate  # noqa
+        pdf_buf = export_pdf(process_info_export, export_rows, summary_export)
+        st.download_button(
+            label="🖨️  Exportar PDF (.pdf)",
+            data=pdf_buf,
+            file_name=f"calculo_{modo_str}_{safe_num}_{date_str}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+        )
+    except ImportError:
+        st.error("Instale: `pip install reportlab`")
+    except Exception as e:
+        st.error(f"Erro PDF: {e}")
+
+with exp_col4:
     if st.button("💾  Salvar no Histórico", use_container_width=True):
         if numero_processo:
             st.session_state.history.append({
