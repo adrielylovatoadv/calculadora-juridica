@@ -1112,13 +1112,28 @@ def _parse_date(d: str, m: str, y: str):
 
 
 def extract_text_pdf(file_bytes: bytes) -> str:
-    # Tenta PyMuPDF primeiro (preserva ordem de leitura em tabelas)
+    # PyMuPDF: reconstrói linhas pela posição Y de cada palavra
+    # Resolve PDFs com colunas separadas (ex: extratos bancários Itaú)
     try:
-        import fitz  # PyMuPDF
+        import fitz
         doc = fitz.open(stream=file_bytes, filetype="pdf")
         parts = []
         for page in doc:
-            parts.append(page.get_text("text"))
+            words = page.get_text("words")  # (x0,y0,x1,y1, word, block, line, wnum)
+            if not words:
+                parts.append(page.get_text("text"))
+                continue
+            # Agrupa palavras pela posição vertical (Y) com tolerância de 4pt
+            # Palavras na mesma linha visual ficam juntas, ordenadas por X (esquerda→direita)
+            rows: dict[int, list] = {}
+            for w in words:
+                y_key = round(w[1] / 4)  # quantiza Y a grupos de 4pt
+                rows.setdefault(y_key, []).append((w[0], w[4]))  # (x, texto)
+            page_lines = []
+            for y_key in sorted(rows):
+                line_words = sorted(rows[y_key], key=lambda t: t[0])
+                page_lines.append("  ".join(t[1] for t in line_words))
+            parts.append("\n".join(page_lines))
         doc.close()
         text = "\n".join(parts)
         if text.strip():
