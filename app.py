@@ -1085,6 +1085,23 @@ def _parse_date(d: str, m: str, y: str):
 
 
 def extract_text_pdf(file_bytes: bytes) -> str:
+    # Tenta PyMuPDF primeiro (preserva ordem de leitura em tabelas)
+    try:
+        import fitz  # PyMuPDF
+        doc = fitz.open(stream=file_bytes, filetype="pdf")
+        parts = []
+        for page in doc:
+            parts.append(page.get_text("text"))
+        doc.close()
+        text = "\n".join(parts)
+        if text.strip():
+            return text
+    except ImportError:
+        pass
+    except Exception:
+        pass
+
+    # Fallback: pdfplumber
     try:
         import pdfplumber
         import io
@@ -1553,7 +1570,7 @@ with st.expander("📂 Clique para enviar um arquivo e extrair os lançamentos a
                 raw = _ler_arquivo(uf)
 
             if raw == "__NO_PDFPLUMBER__":
-                st.error(f"pdfplumber não encontrado. `pip install pdfplumber`")
+                st.error(f"Nenhum extrator de PDF disponível. `pip install pymupdf pdfplumber`")
                 raw = ""
             elif raw == "__NO_EASYOCR__":
                 st.error("EasyOCR não encontrado. `pip install easyocr`")
@@ -1590,10 +1607,22 @@ with st.expander("📂 Clique para enviar um arquivo e extrair os lançamentos a
             st.warning("Nenhum par data + valor encontrado nos arquivos enviados.")
 
         if raw_texts:
-            with st.expander("📄 Ver texto extraído dos arquivos", expanded=False):
+            with st.expander("📄 Ver texto extraído dos arquivos", expanded=True):
+                st.caption("Use este texto para verificar se o app leu o PDF corretamente. "
+                           "Se estiver confuso ou faltando dados, envie para análise.")
+                busca_raw = st.text_input("🔍 Buscar palavra no texto extraído", placeholder="Ex: tarifa, cobrança, 01/01/2024…", key="busca_raw_text")
                 for nome, txt in raw_texts.items():
-                    st.caption(f"— {nome}")
-                    st.text_area("", txt, height=200, key=f"raw_{nome}", label_visibility="collapsed")
+                    st.markdown(f"**📎 {nome}**")
+                    if busca_raw.strip():
+                        linhas = txt.splitlines()
+                        termo = busca_raw.strip().lower()
+                        encontradas = [f"  linha {i+1}: {l}" for i, l in enumerate(linhas) if termo in l.lower()]
+                        if encontradas:
+                            st.success(f"{len(encontradas)} linha(s) com '{busca_raw}':")
+                            st.code("\n".join(encontradas), language=None)
+                        else:
+                            st.warning(f"'{busca_raw}' não encontrado em {nome}.")
+                    st.text_area("", txt, height=300, key=f"raw_{nome}", label_visibility="collapsed")
 
     # ── Preview e seleção ─────────────────────────────────────
     if st.session_state.upload_parsed:
