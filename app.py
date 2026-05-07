@@ -1160,40 +1160,29 @@ def extract_text_docx(file_bytes: bytes) -> str:
 def parse_charges_from_text(text: str, filtro: str = "") -> list:
     """
     Extrai pares (data, valor) de texto de extratos ou sentenças.
-    Se 'filtro' for fornecido, retorna apenas linhas que contenham esse texto.
-    Retorna lista de dicts com 'data', 'valor', 'descricao', 'selecionado'.
+    Se 'filtro' for fornecido, busca o termo em cada linha e também nas
+    linhas vizinhas (janela de ±4 linhas) para encontrar data e valor
+    mesmo quando estão em linhas separadas do nome da cobrança.
     """
     results = []
     seen = set()
+    lines = [l.strip() for l in text.splitlines()]
     filtro_re = re.compile(re.escape(filtro), re.IGNORECASE) if filtro else None
 
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or len(line) < 8:
-            continue
-
-        # Se filtro informado, só processa linhas que contenham o termo
-        if filtro_re and not filtro_re.search(line):
-            continue
-
-        # Ignora linhas que claramente são créditos/saldos (só quando sem filtro manual)
-        if not filtro_re and _IGNORE_KEYWORDS.search(line):
-            continue
-
-        dates  = _DATE_RE.findall(line)
-        values = _VALUE_RE.findall(line)
-
+    def _extract_from_window(window_lines, label_line):
+        """Extrai todos os pares data+valor de um conjunto de linhas."""
+        found = []
+        combined = " ".join(window_lines)
+        dates  = _DATE_RE.findall(combined)
+        values = _VALUE_RE.findall(combined)
         if not dates or not values:
-            continue
-
+            return found
         for d_match in dates:
             parsed_date = _parse_date(*d_match)
             if parsed_date is None:
                 continue
-            # Rejeita datas absurdas (futuro distante ou muito antigas)
             if parsed_date.year < 1994 or parsed_date > date.today():
                 continue
-
             for v_match in values:
                 raw = next((v for v in v_match if v), None)
                 if raw is None:
@@ -1201,22 +1190,66 @@ def parse_charges_from_text(text: str, filtro: str = "") -> list:
                 val = _parse_value(raw)
                 if val <= 0 or val > 9_999_999:
                     continue
-
                 key = (parsed_date, round(val, 2))
                 if key in seen:
                     continue
                 seen.add(key)
-
-                is_charge = bool(_CHARGE_KEYWORDS.search(line))
-                results.append({
+                found.append({
                     "selecionado": True,
                     "data":        parsed_date,
                     "valor":       val,
-                    "descricao":   line[:120],
-                    "_is_charge":  is_charge,
+                    "descricao":   label_line[:120],
+                    "_is_charge":  True,
                 })
+        return found
 
-    # Ordena por data
+    if filtro_re:
+        # Com filtro: busca o termo linha a linha e usa janela de contexto
+        WINDOW = 4
+        for i, line in enumerate(lines):
+            if not filtro_re.search(line):
+                continue
+            start = max(0, i - WINDOW)
+            end   = min(len(lines), i + WINDOW + 1)
+            window = lines[start:end]
+            results.extend(_extract_from_window(window, line))
+    else:
+        # Sem filtro: comportamento original linha a linha
+        for line in lines:
+            if not line or len(line) < 8:
+                continue
+            if _IGNORE_KEYWORDS.search(line):
+                continue
+            dates  = _DATE_RE.findall(line)
+            values = _VALUE_RE.findall(line)
+            if not dates or not values:
+                continue
+            for d_match in dates:
+                parsed_date = _parse_date(*d_match)
+                if parsed_date is None:
+                    continue
+                if parsed_date.year < 1994 or parsed_date > date.today():
+                    continue
+                for v_match in values:
+                    raw = next((v for v in v_match if v), None)
+                    if raw is None:
+                        continue
+                    val = _parse_value(raw)
+                    if val <= 0 or val > 9_999_999:
+                        continue
+                    key = (parsed_date, round(val, 2))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    is_charge = bool(_CHARGE_KEYWORDS.search(line))
+                    results.append({
+                        "selecionado": True,
+                        "data":        parsed_date,
+                        "valor":       val,
+                        "descricao":   line[:120],
+                        "_is_charge":  is_charge,
+                    })
+
     results.sort(key=lambda r: r["data"])
     return results
 
