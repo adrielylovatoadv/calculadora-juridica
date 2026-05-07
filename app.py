@@ -1046,11 +1046,12 @@ def export_pdf(process_info: dict, rows: list, summary: dict) -> BytesIO:
 # EXTRAÇÃO DE TEXTO E PARSING DE DOCUMENTOS
 # ──────────────────────────────────────────────────────────────
 
-_DATE_RE  = re.compile(r'\b(\d{2})[/\-\.](\d{2})[/\-\.](\d{2,4})\b')
+_DATE_RE         = re.compile(r'\b(\d{2})[/\-\.](\d{2})[/\-\.](\d{2,4})\b')
+_DATE_RE_PARTIAL = re.compile(r'\b(\d{2})[/](\d{2})\b')   # DD/MM sem ano (extratos bancários)
 _VALUE_RE = re.compile(
     r'R\$\s*([\d]{1,3}(?:\.[\d]{3})*,\d{2})'          # R$ 1.234,56
     r'|(?<![,\d])([\d]{1,3}(?:\.[\d]{3})+,\d{2})(?![,\d])'  # 1.234,56 sem R$
-    r'|(?<![,\d])(\d{1,6},\d{2})(?![,\d])'             # 999,99 sem separador
+    r'|(?<![,\d])(\d{1,6},\d{2})(?![,\d\-])'           # 999,99 sem separador (ignora - colado)
 )
 # Palavras que indicam que um valor é crédito/saldo e não cobrança — ignorar
 _IGNORE_KEYWORDS = re.compile(
@@ -1063,6 +1064,32 @@ _CHARGE_KEYWORDS = re.compile(
     r'|mensalidade|parcela|compra|lançamento|lancamento|desconto\s+em\s+folha)\b',
     re.IGNORECASE,
 )
+# Meses em português para inferir ano do cabeçalho
+_MONTH_NAMES_PT = {
+    'janeiro':1,'fevereiro':2,'março':3,'marco':3,'abril':4,'maio':5,'junho':6,
+    'julho':7,'agosto':8,'setembro':9,'outubro':10,'novembro':11,'dezembro':12,
+    'jan':1,'fev':2,'mar':3,'abr':4,'mai':5,'jun':6,
+    'jul':7,'ago':8,'set':9,'out':10,'nov':11,'dez':12,
+}
+_HEADER_MONTH_YEAR = re.compile(
+    r'\b(janeiro|fevereiro|mar[çc]o|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro'
+    r'|jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)[/\s\-](\d{4})\b',
+    re.IGNORECASE,
+)
+_HEADER_NUM_YEAR = re.compile(r'\b(\d{1,2})[/\-](\d{4})\b')
+
+
+def _infer_year_from_text(text: str) -> int:
+    """Extrai o ano do cabeçalho do documento (ex: NOVEMBRO/2018, 11/2018)."""
+    for m in _HEADER_MONTH_YEAR.finditer(text):
+        y = int(m.group(2))
+        if 1994 <= y <= date.today().year:
+            return y
+    for m in _HEADER_NUM_YEAR.finditer(text):
+        y = int(m.group(2))
+        if 1994 <= y <= date.today().year:
+            return y
+    return date.today().year
 
 
 def _parse_value(raw: str) -> float:
@@ -1169,43 +1196,39 @@ def parse_charges_from_text(text: str, filtro: str = "") -> list:
     lines = [l.strip() for l in text.splitlines()]
     filtro_re = re.compile(re.escape(filtro), re.IGNORECASE) if filtro else None
 
-    def _extract_from_window(window_lines, label_line):
-        """Extrai todos os pares data+valor de um conjunto de linhas."""
-        found = []
-        combined = " ".join(window_lines)
-        dates  = _DATE_RE.findall(combined)
-        values = _VALUE_RE.findall(combined)
-        if not dates or not values:
-            return found
-        for d_match in dates:
-            parsed_date = _parse_date(*d_match)
-            if parsed_date is None:
-                continue
-            if parsed_date.year < 1994 or parsed_date > date.today():
-                continue
-            for v_match in values:
-                raw = next((v for v in v_match if v), None)
-                if raw is None:
-                    continue
+    # Infere o ano do documento para tratar datas no formato DD/MM (sem ano)
+    inferred_year = _infer_year_from_text(text)
+
+    def _find_date_in_line(line: str) -> date | None:
+        """Tenta extrair data da linha: primeiro DD/MM/AAAA, depois DD/MM com ano inferido."""
+        for d, m, y in _DATE_RE.findall(line):
+            pd_ = _parse_date(d, m, y)
+            if pd_ and 1994 <= pd_.year <= date.today().year:
+                return pd_
+        for d, m in _DATE_RE_PARTIAL.findall(line):
+            try:
+                di, mi = int(d), int(m)
+                if 1 <= di <= 31 and 1 <= mi <= 12:
+                    pd_ = date(inferred_year, mi, di)
+                    if pd_ <= date.today():
+                        return pd_
+            except ValueError:
+                pass
+        return None
+
+    def _find_first_value_in_line(line: str) -> float | None:
+        """Retorna o primeiro valor monetário válido encontrado na linha."""
+        for v_match in _VALUE_RE.findall(line):
+            raw = next((v for v in v_match if v), None)
+            if raw:
                 val = _parse_value(raw)
-                if val <= 0 or val > 9_999_999:
-                    continue
-                key = (parsed_date, round(val, 2))
-                if key in seen:
-                    continue
-                seen.add(key)
-                found.append({
-                    "selecionado": True,
-                    "data":        parsed_date,
-                    "valor":       val,
-                    "descricao":   label_line[:120],
-                    "_is_charge":  True,
-                })
-        return found
+                if 0 < val <= 9_999_999:
+                    return val
+        return None
 
     if filtro_re:
-        # Com filtro: para cada ocorrência do nome, encontra a data e o valor
-        # MAIS PRÓXIMOS daquela linha (não todos do contexto)
+        # Para cada ocorrência do nome da cobrança, busca data e valor
+        # mais próximos (nas linhas vizinhas se necessário)
         WINDOW = 6
         for i, line in enumerate(lines):
             if not filtro_re.search(line):
@@ -1214,31 +1237,29 @@ def parse_charges_from_text(text: str, filtro: str = "") -> list:
             start = max(0, i - WINDOW)
             end   = min(len(lines), i + WINDOW + 1)
 
-            # Data mais próxima
+            # Data mais próxima (prioriza mesma linha, depois vizinhas)
             best_date = None
             best_date_dist = WINDOW + 1
             for j in range(start, end):
                 dist = abs(j - i)
-                for d_match in _DATE_RE.findall(lines[j]):
-                    pd_ = _parse_date(*d_match)
-                    if pd_ and 1994 <= pd_.year and pd_ <= date.today():
-                        if dist < best_date_dist:
-                            best_date_dist = dist
-                            best_date = pd_
+                if dist >= best_date_dist:
+                    continue
+                pd_ = _find_date_in_line(lines[j])
+                if pd_:
+                    best_date_dist = dist
+                    best_date = pd_
 
-            # Valor mais próximo
+            # Valor mais próximo (prioriza mesma linha, depois vizinhas)
             best_val = None
             best_val_dist = WINDOW + 1
             for j in range(start, end):
                 dist = abs(j - i)
-                for v_match in _VALUE_RE.findall(lines[j]):
-                    raw = next((v for v in v_match if v), None)
-                    if raw:
-                        val = _parse_value(raw)
-                        if 0 < val <= 9_999_999:
-                            if dist < best_val_dist:
-                                best_val_dist = dist
-                                best_val = val
+                if dist >= best_val_dist:
+                    continue
+                val = _find_first_value_in_line(lines[j])
+                if val:
+                    best_val_dist = dist
+                    best_val = val
 
             if best_date and best_val:
                 key = (best_date, round(best_val, 2))
@@ -1252,41 +1273,27 @@ def parse_charges_from_text(text: str, filtro: str = "") -> list:
                         "_is_charge":  True,
                     })
     else:
-        # Sem filtro: comportamento original linha a linha
+        # Sem filtro: linha a linha, aceita datas completas e parciais
         for line in lines:
             if not line or len(line) < 8:
                 continue
             if _IGNORE_KEYWORDS.search(line):
                 continue
-            dates  = _DATE_RE.findall(line)
-            values = _VALUE_RE.findall(line)
-            if not dates or not values:
+            parsed_date = _find_date_in_line(line)
+            if not parsed_date:
                 continue
-            for d_match in dates:
-                parsed_date = _parse_date(*d_match)
-                if parsed_date is None:
-                    continue
-                if parsed_date.year < 1994 or parsed_date > date.today():
-                    continue
-                for v_match in values:
-                    raw = next((v for v in v_match if v), None)
-                    if raw is None:
-                        continue
-                    val = _parse_value(raw)
-                    if val <= 0 or val > 9_999_999:
-                        continue
-                    key = (parsed_date, round(val, 2))
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    is_charge = bool(_CHARGE_KEYWORDS.search(line))
-                    results.append({
-                        "selecionado": True,
-                        "data":        parsed_date,
-                        "valor":       val,
-                        "descricao":   line[:120],
-                        "_is_charge":  is_charge,
-                    })
+            val = _find_first_value_in_line(line)
+            if not val:
+                continue
+            seen.add(key)
+            is_charge = bool(_CHARGE_KEYWORDS.search(line))
+            results.append({
+                "selecionado": True,
+                "data":        parsed_date,
+                "valor":       val,
+                "descricao":   line[:120],
+                "_is_charge":  is_charge,
+            })
 
     results.sort(key=lambda r: r["data"])
     return results
