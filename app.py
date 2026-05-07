@@ -119,6 +119,35 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# Máscara automática DD/MM/AAAA nos campos de data
+st.markdown("""
+<iframe srcdoc="<script>
+(function(){
+  function mask(input){
+    if(input._dm) return;
+    input._dm = true;
+    input.addEventListener('input', function(){
+      if(input._busy) return;
+      input._busy = true;
+      var d = input.value.replace(/\\D/g,'').slice(0,8);
+      var f = d;
+      if(d.length>2) f = d.slice(0,2)+'/'+d.slice(2);
+      if(d.length>4) f = d.slice(0,2)+'/'+d.slice(2,4)+'/'+d.slice(4);
+      var s = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype,'value').set;
+      s.call(input, f);
+      input.dispatchEvent(new Event('input',{bubbles:true}));
+      input._busy = false;
+    });
+  }
+  function apply(){
+    window.parent.document.querySelectorAll('input[placeholder=\\"DD/MM/AAAA\\"]').forEach(mask);
+  }
+  apply();
+  new MutationObserver(apply).observe(window.parent.document.body,{childList:true,subtree:true});
+})();
+<\\/script>" style="display:none" height="0" width="0"></iframe>
+""", unsafe_allow_html=True)
+
 # ──────────────────────────────────────────────────────────────
 # CONSTANTES
 # ──────────────────────────────────────────────────────────────
