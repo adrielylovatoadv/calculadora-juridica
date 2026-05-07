@@ -530,6 +530,11 @@ def export_word(process_info: dict, rows: list, summary: dict) -> BytesIO:
 
     doc = Document()
 
+    # Fonte padrão Calibri em todo o documento
+    from docx.oxml.ns import qn
+    doc.styles["Normal"].font.name = "Calibri"
+    doc.styles["Normal"]._element.rPr.rFonts.set(qn("w:eastAsia"), "Calibri")
+
     # Margens
     sec = doc.sections[0]
     sec.left_margin   = Cm(2.5)
@@ -1369,10 +1374,14 @@ with st.expander("📂 Clique para enviar um arquivo e extrair os lançamentos a
                         continue
                     novas.append({"data_cobranca": d, "valor": float(row["Valor (R$)"])})
 
+            # Limpa cache dos campos de data para as novas datas aparecerem corretamente
+            for _k in list(st.session_state.keys()):
+                if _k.startswith("date_") or _k.startswith("val_"):
+                    del st.session_state[_k]
+
             if modo_import == "Substituir a tabela atual":
                 st.session_state.charges = novas if novas else [{"data_cobranca": date.today(), "valor": 0.0}]
             else:
-                # Remove linha vazia padrão se existir antes de concatenar
                 existing = [c for c in st.session_state.charges if c.get("valor", 0) > 0]
                 st.session_state.charges = existing + novas
 
@@ -1536,6 +1545,10 @@ with st.expander("⚡ Criação rápida de múltiplas linhas", expanded=False):
                     d_item = date(base.year + k, base.month, 28)
             novas.append({"data_cobranca": d_item, "valor": float(lote_valor)})
 
+        # Limpa cache dos campos de data para as novas datas aparecerem corretamente
+        for _k in list(st.session_state.keys()):
+            if _k.startswith("date_") or _k.startswith("val_"):
+                del st.session_state[_k]
         st.session_state.charges = novas
         st.success(f"✅ {int(lote_qtd)} linhas criadas com periodicidade **{lote_freq}** "
                    f"a partir de **{base.strftime('%d/%m/%Y')}**.")
@@ -1576,13 +1589,18 @@ for i, charge in enumerate(st.session_state.charges):
     with cols[1]:
         _d_obj = charge.get("data_cobranca", date.today())
         _d_default_str = _d_obj.strftime("%d/%m/%Y") if isinstance(_d_obj, date) else date.today().strftime("%d/%m/%Y")
-        d_str = st.text_input(
-            f"data_{i}",
-            value=charge.get("_date_str", _d_default_str),
-            placeholder="DD/MM/AAAA",
-            label_visibility="collapsed",
-            key=f"date_{i}",
-        )
+        _num_col, _inp_col = st.columns([0.18, 0.82])
+        with _num_col:
+            st.markdown(f"<div style='padding-top:34px;font-weight:bold;color:#2c5282;font-size:0.9em'>{i+1}.</div>",
+                        unsafe_allow_html=True)
+        with _inp_col:
+            d_str = st.text_input(
+                f"data_{i}",
+                value=charge.get("_date_str", _d_default_str),
+                placeholder="DD/MM/AAAA",
+                label_visibility="collapsed",
+                key=f"date_{i}",
+            )
         try:
             d = datetime.strptime(d_str.strip(), "%d/%m/%Y").date()
         except ValueError:
