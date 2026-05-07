@@ -119,28 +119,44 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Máscara automática DD/MM/AAAA nos campos de data
+# Máscaras automáticas: DD/MM/AAAA para datas e 1.234,56 para valores
 st.markdown("""
 <iframe srcdoc="<script>
 (function(){
-  function mask(input){
-    if(input._dm) return;
-    input._dm = true;
-    input.addEventListener('input', function(){
-      if(input._busy) return;
-      input._busy = true;
-      var d = input.value.replace(/\\D/g,'').slice(0,8);
-      var f = d;
-      if(d.length>2) f = d.slice(0,2)+'/'+d.slice(2);
-      if(d.length>4) f = d.slice(0,2)+'/'+d.slice(2,4)+'/'+d.slice(4);
-      var s = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype,'value').set;
-      s.call(input, f);
-      input.dispatchEvent(new Event('input',{bubbles:true}));
-      input._busy = false;
+  var setter = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype,'value').set;
+  function fire(el, val){ setter.call(el,val); el.dispatchEvent(new Event('input',{bubbles:true})); }
+
+  function dateMask(input){
+    if(input._dm) return; input._dm=true;
+    input.addEventListener('input',function(){
+      if(input._busy) return; input._busy=true;
+      var d=input.value.replace(/\\D/g,'').slice(0,8);
+      var f=d;
+      if(d.length>2) f=d.slice(0,2)+'/'+d.slice(2);
+      if(d.length>4) f=d.slice(0,2)+'/'+d.slice(2,4)+'/'+d.slice(4);
+      fire(input,f); input._busy=false;
     });
   }
+
+  function currencyMask(input){
+    if(input._cm) return; input._cm=true;
+    input.addEventListener('input',function(){
+      if(input._busy) return; input._busy=true;
+      var digits=input.value.replace(/\\D/g,'');
+      if(!digits){ fire(input,''); input._busy=false; return; }
+      var num=parseInt(digits,10);
+      var cents=(num%100).toString().padStart(2,'0');
+      var integer=Math.floor(num/100).toString();
+      integer=integer.replace(/\\B(?=(\\d{3})+(?!\\d))/g,'.');
+      fire(input,integer+','+cents);
+      input._busy=false;
+    });
+  }
+
   function apply(){
-    window.parent.document.querySelectorAll('input[placeholder=\\"DD/MM/AAAA\\"]').forEach(mask);
+    var doc=window.parent.document;
+    doc.querySelectorAll('input[placeholder=\\"DD/MM/AAAA\\"]').forEach(dateMask);
+    doc.querySelectorAll('input[placeholder=\\"0,00\\"]').forEach(currencyMask);
   }
   apply();
   new MutationObserver(apply).observe(window.parent.document.body,{childList:true,subtree:true});
@@ -1840,8 +1856,11 @@ with st.expander("📂 Clique para enviar um arquivo e extrair os lançamentos a
                     del st.session_state[_k]
             for _i, _c in enumerate(final_charges):
                 _d = _c.get("data_cobranca", date.today())
+                _v = float(_c.get("valor", 0.0))
+                _vs = f"{_v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
                 st.session_state[f"date_{_i}"] = _d.strftime("%d/%m/%Y") if isinstance(_d, date) else ""
-                st.session_state[f"val_{_i}"]  = float(_c.get("valor", 0.0))
+                st.session_state[f"val_{_i}"]  = _vs
+                _c["_val_str"] = _vs
 
             st.session_state.charges = final_charges
 
@@ -2010,8 +2029,11 @@ with st.expander("⚡ Criação rápida de múltiplas linhas", expanded=False):
                 del st.session_state[_k]
         for _i, _c in enumerate(novas):
             _d = _c.get("data_cobranca", date.today())
+            _v = float(_c.get("valor", 0.0))
+            _vs = f"{_v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
             st.session_state[f"date_{_i}"] = _d.strftime("%d/%m/%Y") if isinstance(_d, date) else ""
-            st.session_state[f"val_{_i}"]  = float(_c.get("valor", 0.0))
+            st.session_state[f"val_{_i}"]  = _vs
+            _c["_val_str"] = _vs
         st.session_state.charges = novas
         st.success(f"✅ {int(lote_qtd)} linhas criadas com periodicidade **{lote_freq}** "
                    f"a partir de **{base.strftime('%d/%m/%Y')}**.")
@@ -2067,16 +2089,23 @@ for i, charge in enumerate(st.session_state.charges):
         st.session_state.charges[i]["_date_str"] = d_str
 
     with cols[2]:
-        v = st.number_input(
+        _v_raw = charge.get("valor", 0.0)
+        _v_default_str = f"{float(_v_raw):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        v_str = st.text_input(
             f"val_{i}",
-            value=float(charge.get("valor", 0.0)),
-            min_value=0.0,
-            step=0.01,
-            format="%.2f",
+            value=charge.get("_val_str", _v_default_str),
+            placeholder="0,00",
             label_visibility="collapsed",
             key=f"val_{i}",
         )
+        try:
+            v = float(v_str.strip().replace(".", "").replace(",", "."))
+            if v < 0:
+                v = 0.0
+        except ValueError:
+            v = 0.0
         st.session_state.charges[i]["valor"] = v
+        st.session_state.charges[i]["_val_str"] = v_str
 
     # Cálculo
     if v > 0 and has_indices:
