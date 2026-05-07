@@ -1196,20 +1196,36 @@ def parse_charges_from_text(text: str, filtro: str = "") -> list:
     lines = [l.strip() for l in text.splitlines()]
     filtro_re = re.compile(re.escape(filtro), re.IGNORECASE) if filtro else None
 
-    # Infere o ano do documento para tratar datas no formato DD/MM (sem ano)
-    inferred_year = _infer_year_from_text(text)
+    # Ano progressivo por linha: atualiza sempre que encontra um cabeçalho de mês/ano
+    # Resolve extratos com múltiplas páginas e anos diferentes (ex: Itaú 190 páginas)
+    _year_per_line = []
+    _cur_year = date.today().year
+    for _ln in lines:
+        for _m in _HEADER_MONTH_YEAR.finditer(_ln):
+            _y = int(_m.group(2))
+            if 1994 <= _y <= date.today().year:
+                _cur_year = _y
+                break
+        else:
+            for _m in _HEADER_NUM_YEAR.finditer(_ln):
+                _y = int(_m.group(2))
+                if 1994 <= _y <= date.today().year:
+                    _cur_year = _y
+                    break
+        _year_per_line.append(_cur_year)
 
-    def _find_date_in_line(line: str) -> date | None:
-        """Tenta extrair data da linha: primeiro DD/MM/AAAA, depois DD/MM com ano inferido."""
+    def _find_date_in_line(line: str, line_idx: int) -> date | None:
+        """Tenta extrair data da linha: primeiro DD/MM/AAAA, depois DD/MM com ano da página."""
         for d, m, y in _DATE_RE.findall(line):
             pd_ = _parse_date(d, m, y)
             if pd_ and 1994 <= pd_.year <= date.today().year:
                 return pd_
+        year_ctx = _year_per_line[line_idx] if line_idx < len(_year_per_line) else date.today().year
         for d, m in _DATE_RE_PARTIAL.findall(line):
             try:
                 di, mi = int(d), int(m)
                 if 1 <= di <= 31 and 1 <= mi <= 12:
-                    pd_ = date(inferred_year, mi, di)
+                    pd_ = date(year_ctx, mi, di)
                     if pd_ <= date.today():
                         return pd_
             except ValueError:
@@ -1244,7 +1260,7 @@ def parse_charges_from_text(text: str, filtro: str = "") -> list:
                 dist = abs(j - i)
                 if dist >= best_date_dist:
                     continue
-                pd_ = _find_date_in_line(lines[j])
+                pd_ = _find_date_in_line(lines[j], j)
                 if pd_:
                     best_date_dist = dist
                     best_date = pd_
@@ -1274,16 +1290,19 @@ def parse_charges_from_text(text: str, filtro: str = "") -> list:
                     })
     else:
         # Sem filtro: linha a linha, aceita datas completas e parciais
-        for line in lines:
+        for li, line in enumerate(lines):
             if not line or len(line) < 8:
                 continue
             if _IGNORE_KEYWORDS.search(line):
                 continue
-            parsed_date = _find_date_in_line(line)
+            parsed_date = _find_date_in_line(line, li)
             if not parsed_date:
                 continue
             val = _find_first_value_in_line(line)
             if not val:
+                continue
+            key = (parsed_date, round(val, 2))
+            if key in seen:
                 continue
             seen.add(key)
             is_charge = bool(_CHARGE_KEYWORDS.search(line))
