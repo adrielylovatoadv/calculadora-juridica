@@ -2000,7 +2000,7 @@ with btn_col2:
         st.rerun()
 
 # Cabeçalhos das colunas
-HDR_COLS = [0.4, 1.6, 1.5, 1.6, 1.4, 1.6, 1.6, 0.5]
+HDR_COLS = [0.4, 2.0, 1.5, 1.6, 1.4, 1.6, 1.6, 0.5]
 hcols = st.columns(HDR_COLS)
 labels = ["#", "Data da Cobrança", "Valor Original (R$)",
           "Débito Corrigido", "Juros Acum. %", "Valor dos Juros", "Débito Total", "Del."]
