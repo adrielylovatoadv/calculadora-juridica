@@ -1204,15 +1204,53 @@ def parse_charges_from_text(text: str, filtro: str = "") -> list:
         return found
 
     if filtro_re:
-        # Com filtro: busca o termo linha a linha e usa janela de contexto
-        WINDOW = 4
+        # Com filtro: para cada ocorrência do nome, encontra a data e o valor
+        # MAIS PRÓXIMOS daquela linha (não todos do contexto)
+        WINDOW = 6
         for i, line in enumerate(lines):
             if not filtro_re.search(line):
                 continue
+
             start = max(0, i - WINDOW)
             end   = min(len(lines), i + WINDOW + 1)
-            window = lines[start:end]
-            results.extend(_extract_from_window(window, line))
+
+            # Data mais próxima
+            best_date = None
+            best_date_dist = WINDOW + 1
+            for j in range(start, end):
+                dist = abs(j - i)
+                for d_match in _DATE_RE.findall(lines[j]):
+                    pd_ = _parse_date(*d_match)
+                    if pd_ and 1994 <= pd_.year and pd_ <= date.today():
+                        if dist < best_date_dist:
+                            best_date_dist = dist
+                            best_date = pd_
+
+            # Valor mais próximo
+            best_val = None
+            best_val_dist = WINDOW + 1
+            for j in range(start, end):
+                dist = abs(j - i)
+                for v_match in _VALUE_RE.findall(lines[j]):
+                    raw = next((v for v in v_match if v), None)
+                    if raw:
+                        val = _parse_value(raw)
+                        if 0 < val <= 9_999_999:
+                            if dist < best_val_dist:
+                                best_val_dist = dist
+                                best_val = val
+
+            if best_date and best_val:
+                key = (best_date, round(best_val, 2))
+                if key not in seen:
+                    seen.add(key)
+                    results.append({
+                        "selecionado": True,
+                        "data":        best_date,
+                        "valor":       best_val,
+                        "descricao":   line[:120],
+                        "_is_charge":  True,
+                    })
     else:
         # Sem filtro: comportamento original linha a linha
         for line in lines:
