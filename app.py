@@ -1798,16 +1798,23 @@ with st.expander("📂 Clique para enviar um arquivo e extrair os lançamentos a
                         continue
                     novas.append({"data_cobranca": d, "valor": float(row["Valor (R$)"])})
 
-            # Limpa cache dos campos de data para as novas datas aparecerem corretamente
+            if modo_import == "Substituir a tabela atual":
+                final_charges = novas if novas else [{"data_cobranca": date.today(), "valor": 0.0}]
+            else:
+                existing = [c for c in st.session_state.charges if c.get("valor", 0) > 0]
+                final_charges = existing + novas
+
+            # Limpa keys antigas e pré-popula com os valores corretos
+            # (evita bug do Streamlit que ignora value= quando a key já existe)
             for _k in list(st.session_state.keys()):
                 if _k.startswith("date_") or _k.startswith("val_"):
                     del st.session_state[_k]
+            for _i, _c in enumerate(final_charges):
+                _d = _c.get("data_cobranca", date.today())
+                st.session_state[f"date_{_i}"] = _d.strftime("%d/%m/%Y") if isinstance(_d, date) else ""
+                st.session_state[f"val_{_i}"]  = float(_c.get("valor", 0.0))
 
-            if modo_import == "Substituir a tabela atual":
-                st.session_state.charges = novas if novas else [{"data_cobranca": date.today(), "valor": 0.0}]
-            else:
-                existing = [c for c in st.session_state.charges if c.get("valor", 0) > 0]
-                st.session_state.charges = existing + novas
+            st.session_state.charges = final_charges
 
             st.session_state.upload_parsed   = []
             st.session_state.upload_filename = ""
@@ -1969,10 +1976,13 @@ with st.expander("⚡ Criação rápida de múltiplas linhas", expanded=False):
                     d_item = date(base.year + k, base.month, 28)
             novas.append({"data_cobranca": d_item, "valor": float(lote_valor)})
 
-        # Limpa cache dos campos de data para as novas datas aparecerem corretamente
         for _k in list(st.session_state.keys()):
             if _k.startswith("date_") or _k.startswith("val_"):
                 del st.session_state[_k]
+        for _i, _c in enumerate(novas):
+            _d = _c.get("data_cobranca", date.today())
+            st.session_state[f"date_{_i}"] = _d.strftime("%d/%m/%Y") if isinstance(_d, date) else ""
+            st.session_state[f"val_{_i}"]  = float(_c.get("valor", 0.0))
         st.session_state.charges = novas
         st.success(f"✅ {int(lote_qtd)} linhas criadas com periodicidade **{lote_freq}** "
                    f"a partir de **{base.strftime('%d/%m/%Y')}**.")
