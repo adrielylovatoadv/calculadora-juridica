@@ -120,34 +120,35 @@ st.markdown(
 )
 
 # Máscaras automáticas: DD/MM/AAAA para datas e 1.234,56 para valores
-st.markdown("""
-<iframe srcdoc="<script>
+import streamlit.components.v1 as _components
+_components.html("""
+<script>
 (function(){
-  var setter = Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype,'value').set;
-  function fire(el, val){ setter.call(el,val); el.dispatchEvent(new Event('input',{bubbles:true})); }
+  var setter=Object.getOwnPropertyDescriptor(window.parent.HTMLInputElement.prototype,'value').set;
+  function fire(el,val){setter.call(el,val);el.dispatchEvent(new Event('input',{bubbles:true}));}
 
   function dateMask(input){
-    if(input._dm) return; input._dm=true;
+    if(input._dm)return; input._dm=true;
     input.addEventListener('input',function(){
-      if(input._busy) return; input._busy=true;
-      var d=input.value.replace(/\\D/g,'').slice(0,8);
+      if(input._busy)return; input._busy=true;
+      var d=input.value.replace(/\D/g,'').slice(0,8);
       var f=d;
-      if(d.length>2) f=d.slice(0,2)+'/'+d.slice(2);
-      if(d.length>4) f=d.slice(0,2)+'/'+d.slice(2,4)+'/'+d.slice(4);
+      if(d.length>2)f=d.slice(0,2)+'/'+d.slice(2);
+      if(d.length>4)f=d.slice(0,2)+'/'+d.slice(2,4)+'/'+d.slice(4);
       fire(input,f); input._busy=false;
     });
   }
 
   function currencyMask(input){
-    if(input._cm) return; input._cm=true;
+    if(input._cm)return; input._cm=true;
     input.addEventListener('input',function(){
-      if(input._busy) return; input._busy=true;
-      var digits=input.value.replace(/\\D/g,'');
-      if(!digits){ fire(input,''); input._busy=false; return; }
+      if(input._busy)return; input._busy=true;
+      var digits=input.value.replace(/\D/g,'');
+      if(!digits){fire(input,'');input._busy=false;return;}
       var num=parseInt(digits,10);
       var cents=(num%100).toString().padStart(2,'0');
       var integer=Math.floor(num/100).toString();
-      integer=integer.replace(/\\B(?=(\\d{3})+(?!\\d))/g,'.');
+      integer=integer.replace(/\B(?=(\d{3})+(?!\d))/g,'.');
       fire(input,integer+','+cents);
       input._busy=false;
     });
@@ -155,14 +156,14 @@ st.markdown("""
 
   function apply(){
     var doc=window.parent.document;
-    doc.querySelectorAll('input[placeholder=\\"DD/MM/AAAA\\"]').forEach(dateMask);
-    doc.querySelectorAll('input[placeholder=\\"0,00\\"]').forEach(currencyMask);
+    doc.querySelectorAll('input[placeholder="DD/MM/AAAA"]').forEach(dateMask);
+    doc.querySelectorAll('input[placeholder="0,00"]').forEach(currencyMask);
   }
   apply();
   new MutationObserver(apply).observe(window.parent.document.body,{childList:true,subtree:true});
 })();
-<\\/script>" style="display:none" height="0" width="0"></iframe>
-""", unsafe_allow_html=True)
+</script>
+""", height=0)
 
 # ──────────────────────────────────────────────────────────────
 # CONSTANTES
