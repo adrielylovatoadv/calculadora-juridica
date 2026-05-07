@@ -2023,18 +2023,13 @@ for i, charge in enumerate(st.session_state.charges):
     with cols[1]:
         _d_obj = charge.get("data_cobranca", date.today())
         _d_default_str = _d_obj.strftime("%d/%m/%Y") if isinstance(_d_obj, date) else date.today().strftime("%d/%m/%Y")
-        _num_col, _inp_col = st.columns([0.18, 0.82])
-        with _num_col:
-            st.markdown(f"<div style='padding-top:34px;font-weight:bold;color:#2c5282;font-size:0.9em'>{i+1}.</div>",
-                        unsafe_allow_html=True)
-        with _inp_col:
-            d_str = st.text_input(
-                f"data_{i}",
-                value=charge.get("_date_str", _d_default_str),
-                placeholder="DD/MM/AAAA",
-                label_visibility="collapsed",
-                key=f"date_{i}",
-            )
+        d_str = st.text_input(
+            f"data_{i}",
+            value=charge.get("_date_str", _d_default_str),
+            placeholder="DD/MM/AAAA",
+            label_visibility="collapsed",
+            key=f"date_{i}",
+        )
         try:
             d = datetime.strptime(d_str.strip(), "%d/%m/%Y").date()
         except ValueError:
