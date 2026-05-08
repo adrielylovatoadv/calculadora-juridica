@@ -23,6 +23,27 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ── Login ─────────────────────────────────────────────────────
+_senha_correta = st.secrets.get("SENHA", "escritorio2024") if hasattr(st, "secrets") else "escritorio2024"
+if "logado" not in st.session_state:
+    st.session_state["logado"] = False
+if not st.session_state["logado"]:
+    st.markdown("""<div style="max-width:380px;margin:80px auto;background:white;border-radius:14px;
+        padding:36px;box-shadow:0 4px 24px rgba(0,0,0,0.12);text-align:center;">
+        <h2 style="color:#1a3a6b;margin-bottom:6px;">⚖️ Calculadora Jurídica</h2>
+        <p style="color:#718096;margin-bottom:24px;">Escritório de Advocacia</p>
+    </div>""", unsafe_allow_html=True)
+    with st.form("login_calc"):
+        st.markdown("### 🔐 Acesso")
+        _senha = st.text_input("Senha", type="password")
+        if st.form_submit_button("Entrar", use_container_width=True):
+            if _senha == _senha_correta:
+                st.session_state["logado"] = True
+                st.rerun()
+            else:
+                st.error("Senha incorreta.")
+    st.stop()
+
 # ──────────────────────────────────────────────────────────────
 # CSS PERSONALIZADO
 # ──────────────────────────────────────────────────────────────
