@@ -418,11 +418,7 @@ def export_excel(process_info: dict, rows: list, summary: dict) -> BytesIO:
 
     # ── Dados do processo ──
     process_fields = [
-        ("Número do Processo:", process_info.get("numero_processo", "")),
-        ("Exequente:",          process_info.get("exequente", "")),
-        ("Executado:",          process_info.get("executado", "")),
-        ("Tribunal:",           process_info.get("tribunal", "")),
-        ("Data do Cálculo:",    process_info.get("data_calculo", "")),
+        ("Data do Cálculo:", process_info.get("data_calculo", "")),
     ]
     for label, value in process_fields:
         ws.merge_cells(f"A{row}:B{row}")
@@ -626,14 +622,8 @@ def export_word(process_info: dict, rows: list, summary: dict) -> BytesIO:
     doc.add_paragraph()
 
     # ── Dados do processo ──
-    lbl_parte = "Requerente:" if IS_INIC else "Exequente:"
-    lbl_reu   = "Requerida:"  if IS_INIC else "Executado:"
     process_fields = [
-        ("Número do Processo:", process_info.get("numero_processo", "")),
-        (lbl_parte,             process_info.get("exequente", "")),
-        (lbl_reu,               process_info.get("executado", "")),
-        ("Tribunal:",           process_info.get("tribunal", "")),
-        ("Data do Cálculo:",    process_info.get("data_calculo", "")),
+        ("Data do Cálculo:", process_info.get("data_calculo", "")),
     ]
     ptable = doc.add_table(rows=len(process_fields), cols=2)
     ptable.style = "Table Grid"
@@ -800,25 +790,17 @@ def export_word(process_info: dict, rows: list, summary: dict) -> BytesIO:
     doc.add_paragraph()
 
     # ── Assinatura ──
-    sig1 = doc.add_paragraph(
-        f"{'Local: ' + process_info.get('tribunal','') + ' — ' if not IS_INIC else 'Local e data: _________________________, '}"
-        f"{process_info.get('data_calculo', '')}."
-    )
-    if sig1.runs:
-        sig1.runs[0].font.size = Pt(10)
-
     doc.add_paragraph()
     doc.add_paragraph()
 
     line = doc.add_paragraph("_" * 55)
     line.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-    assinante = process_info.get("assinante_nome") or "Advogado(a) — OAB/_____ n.º _______"
-    cargo     = process_info.get("assinante_cargo") or ("Subscritor do Cálculo" if IS_INIC else "Cargo / Função")
-    name_line = doc.add_paragraph(f"{assinante}\n{cargo}")
+    name_line = doc.add_paragraph("ADRIELY NAVES LOVATO\nOAB/SP 492.370 – OAB/MG 244.799")
     name_line.alignment = WD_ALIGN_PARAGRAPH.CENTER
     for run in name_line.runs:
         run.font.size = Pt(10)
+        run.bold = True
 
     buf = BytesIO()
     doc.save(buf)
@@ -908,14 +890,8 @@ def export_pdf(process_info: dict, rows: list, summary: dict) -> BytesIO:
     story.append(Spacer(1, 4))
 
     # ── Dados do processo ──
-    lbl_parte = "Requerente:" if IS_INIC else "Exequente:"
-    lbl_reu   = "Requerida:"  if IS_INIC else "Executado:"
     process_fields = [
-        ("Número do Processo:", process_info.get("numero_processo", "")),
-        (lbl_parte,             process_info.get("exequente", "")),
-        (lbl_reu,               process_info.get("executado", "")),
-        ("Tribunal:",           process_info.get("tribunal", "")),
-        ("Data do Cálculo:",    process_info.get("data_calculo", "")),
+        ("Data do Cálculo:", process_info.get("data_calculo", "")),
     ]
     ptbl_data = [
         [
@@ -1088,21 +1064,12 @@ def export_pdf(process_info: dict, rows: list, summary: dict) -> BytesIO:
     story.append(Spacer(1, 20))
 
     # ── Assinatura ──
-    loc_line = (
-        f"Local: {process_info.get('tribunal','')} — {process_info.get('data_calculo', '')}."
-        if not IS_INIC else
-        f"Local e data: _________________________, {process_info.get('data_calculo', '')}."
-    )
-    story.append(Paragraph(loc_line, body_style))
     story.append(Spacer(1, 20))
     story.append(HRFlowable(width="60%", thickness=0.5, color=BLACK, hAlign="CENTER"))
     story.append(Spacer(1, 4))
-
-    assinante = process_info.get("assinante_nome") or "Advogado(a) — OAB/_____ n.º _______"
-    cargo     = process_info.get("assinante_cargo") or ("Subscritor do Cálculo" if IS_INIC else "Cargo / Função")
-    sig_style = ParagraphStyle("sig", fontName="Helvetica", fontSize=9, alignment=TA_CENTER)
-    story.append(Paragraph(assinante, sig_style))
-    story.append(Paragraph(cargo, sig_style))
+    sig_style = ParagraphStyle("sig", fontName="Helvetica-Bold", fontSize=9, alignment=TA_CENTER)
+    story.append(Paragraph("ADRIELY NAVES LOVATO", sig_style))
+    story.append(Paragraph("OAB/SP 492.370 – OAB/MG 244.799", sig_style))
 
     doc.build(story)
     buf.seek(0)
@@ -1648,21 +1615,25 @@ indices: dict = st.session_state.indices
 has_indices = bool(indices.get("inpc"))
 
 # ── Seletor de modalidade ─────────────────────────────────────
-modo_col1, modo_col2 = st.columns([2, 2])
+modo_col1, modo_col2 = st.columns([3, 1])
 with modo_col1:
     modo_calculo = st.radio(
         "**Modalidade do Cálculo**",
-        ["📋  Petição Inicial", "⚖️  Cumprimento de Sentença / Execução"],
+        ["📋  Petição Inicial", "⚖️  Cumprimento de Sentença / Execução",
+         "🚗  Revisional de Veículo", "💳  Empréstimo Não Consignado"],
         horizontal=True,
         help=(
-            "**Petição Inicial**: para calcular o valor da causa e anexar à petição. "
-            "Inclui repetição em dobro (CDC art. 42) e dano moral.\n\n"
-            "**Execução**: demonstrativo detalhado para cumprimento de sentença, "
-            "com IAM, honorários e multa art. 523 CPC."
+            "**Petição Inicial**: valor da causa para petição inicial.\n\n"
+            "**Execução**: demonstrativo para cumprimento de sentença.\n\n"
+            "**Revisional de Veículo**: calcula diferença entre taxa contratada e taxa média do mercado.\n\n"
+            "**Empréstimo Não Consignado**: revisional de crédito pessoal não consignado."
         ),
     )
-IS_INICIAL   = "Inicial"    in modo_calculo
-IS_EXECUCAO  = "Execução"   in modo_calculo
+IS_INICIAL        = "Inicial"    in modo_calculo
+IS_EXECUCAO       = "Execução"   in modo_calculo
+IS_REVISIONAL_VEI = "Veículo"    in modo_calculo
+IS_REVISIONAL_EMP = "Consignado" in modo_calculo
+IS_REVISIONAL     = IS_REVISIONAL_VEI or IS_REVISIONAL_EMP
 
 if not has_indices:
     st.warning(
@@ -1942,29 +1913,25 @@ with st.expander("📂 Clique para enviar um arquivo e extrair os lançamentos a
                         st.caption(obs)
 
 # ──────────────────────────────────────────────────────────────
-# DADOS DO PROCESSO
+# DATA DO CÁLCULO
 # ──────────────────────────────────────────────────────────────
-st.markdown('<div class="section-header"><b>📄 Dados do Processo</b></div>', unsafe_allow_html=True)
-
-col1, col2, col3 = st.columns([2, 2, 1])
-with col1:
-    numero_processo = st.text_input("Número do Processo", placeholder="0000000-00.0000.0.00.0000")
-    exequente = st.text_input("Exequente (Credor / Autor)", placeholder="Nome completo")
-
-with col2:
-    executado = st.text_input("Executado (Devedor / Réu)", placeholder="Nome completo")
-    tribunal = st.selectbox("Tribunal", ["TJMG (CGJ/MG)", "TJSP"])
-
-with col3:
+_dc_col, _ = st.columns([1, 3])
+with _dc_col:
     _dc_default = date.today().strftime("%d/%m/%Y")
-    dc_str = st.text_input("Data do Cálculo", value=_dc_default, placeholder="DD/MM/AAAA")
+    dc_str = st.text_input("📅 Data do Cálculo", value=_dc_default, placeholder="DD/MM/AAAA")
     try:
         data_calculo = datetime.strptime(dc_str.strip(), "%d/%m/%Y").date()
     except ValueError:
         data_calculo = date.today()
         if dc_str.strip():
             st.warning("⚠️ Data inválida. Use DD/MM/AAAA.")
-    st.caption("Data-base para o cálculo da execução")
+    st.caption("Data-base para o cálculo")
+
+# Set empty defaults for removed fields (kept for export compatibility)
+numero_processo = ""
+exequente = ""
+executado = ""
+tribunal = "TJMG (CGJ/MG)"
 
 # ──────────────────────────────────────────────────────────────
 # LANÇAMENTOS DE COBRANÇA
@@ -2182,6 +2149,112 @@ if to_remove:
         c for j, c in enumerate(st.session_state.charges) if j not in to_remove
     ]
     st.rerun()
+
+# ──────────────────────────────────────────────────────────────
+# CALCULADORAS REVISIONAIS
+# ──────────────────────────────────────────────────────────────
+if IS_REVISIONAL:
+    BCB_SERIES_VEI = 20714   # Taxa média PF - Aquisição de veículos
+    BCB_SERIES_EMP = 25464   # Taxa média PF - Crédito pessoal não consignado
+
+    def _buscar_taxa_bcb(serie: int, ano: int, mes: int) -> float | None:
+        """Busca a taxa média do BCB para o mês/ano da contratação."""
+        url = f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.{serie}/dados?formato=json&dataInicial=01/{mes:02d}/{ano}&dataFinal=28/{mes:02d}/{ano}"
+        try:
+            import requests as _req
+            resp = _req.get(url, timeout=15)
+            resp.raise_for_status()
+            dados = resp.json()
+            if dados:
+                return float(str(dados[-1]["valor"]).replace(",", "."))
+        except Exception:
+            pass
+        return None
+
+    def _pmt(pv: float, i: float, n: int) -> float:
+        """Calcula prestação pelo Sistema Francês (Price). i em % a.m."""
+        if i == 0 or n == 0:
+            return pv / n if n else 0
+        ir = i / 100.0
+        return pv * ir / (1 - (1 + ir) ** (-n))
+
+    nome_calc = "Veículo" if IS_REVISIONAL_VEI else "Empréstimo Não Consignado"
+    serie_bcb = BCB_SERIES_VEI if IS_REVISIONAL_VEI else BCB_SERIES_EMP
+
+    st.markdown(f'<div class="section-header"><b>🔢 Revisional de {nome_calc}</b></div>', unsafe_allow_html=True)
+    st.caption(f"Série BCB: {serie_bcb} · {'Taxa média – PF – Aquisição de veículos' if IS_REVISIONAL_VEI else 'Taxa média – PF – Crédito pessoal não consignado'}")
+
+    rev_col1, rev_col2 = st.columns(2)
+    with rev_col1:
+        rev_valor = st.number_input("💰 Valor Financiado (R$)", min_value=0.0, value=0.0, step=100.0, format="%.2f")
+        rev_parcelas = st.number_input("📅 Número de Parcelas", min_value=1, max_value=360, value=48, step=1)
+        rev_taxa_str = st.text_input("📈 Taxa Contratada (% a.m.)", value="", placeholder="Ex: 2,50")
+    with rev_col2:
+        rev_data_str = st.text_input("📋 Data da Contratação", value="", placeholder="DD/MM/AAAA")
+        rev_dobro = st.checkbox("× 2 — Repetição em dobro (CDC art. 42, §único)", value=True)
+        rev_buscar = st.button("🔍 Buscar Taxa Média BCB e Calcular", type="primary", use_container_width=True)
+
+    if rev_buscar and rev_valor > 0:
+        try:
+            taxa_c = float(rev_taxa_str.replace(",", "."))
+        except Exception:
+            taxa_c = 0.0
+            st.error("Informe a taxa contratada corretamente.")
+
+        try:
+            rev_data = datetime.strptime(rev_data_str.strip(), "%d/%m/%Y").date()
+        except Exception:
+            rev_data = None
+            st.error("Informe a data da contratação corretamente (DD/MM/AAAA).")
+
+        if taxa_c > 0 and rev_data and rev_parcelas > 0:
+            with st.spinner(f"Buscando taxa média BCB (série {serie_bcb}) para {rev_data.strftime('%m/%Y')}…"):
+                taxa_m = _buscar_taxa_bcb(serie_bcb, rev_data.year, rev_data.month)
+
+            if taxa_m is None:
+                st.warning(f"⚠️ Não foi possível obter a taxa média do BCB para {rev_data.strftime('%m/%Y')}. Verifique a conexão ou insira a taxa manualmente.")
+                taxa_m_str = st.text_input("Taxa Média Mercado (% a.m.) — manual:", value="", placeholder="Ex: 1,80")
+                try:
+                    taxa_m = float(taxa_m_str.replace(",", ".")) if taxa_m_str else None
+                except Exception:
+                    taxa_m = None
+
+            if taxa_m is not None:
+                pmt_c = _pmt(rev_valor, taxa_c, rev_parcelas)
+                pmt_m = _pmt(rev_valor, taxa_m, rev_parcelas)
+                total_c = pmt_c * rev_parcelas
+                total_m = pmt_m * rev_parcelas
+                excesso = total_c - total_m
+                valor_causa = excesso * 2 if rev_dobro else excesso
+
+                st.markdown('<div class="section-header"><b>📊 Resultado do Revisional</b></div>', unsafe_allow_html=True)
+                rc1, rc2, rc3 = st.columns(3)
+                rc1.metric("Taxa Contratada", f"{taxa_c:.4f}% a.m.")
+                rc2.metric(f"Taxa Média Mercado ({rev_data.strftime('%m/%Y')})", f"{taxa_m:.4f}% a.m.")
+                rc3.metric("Diferença de Taxa", f"{taxa_c - taxa_m:.4f}% a.m.")
+
+                st.markdown(f"""<div class="result-card">
+                    <table>
+                        <tr><td><b>Prestação contratada:</b></td><td style="text-align:right">{fmt_brl(pmt_c)}/mês</td></tr>
+                        <tr><td><b>Prestação à taxa de mercado:</b></td><td style="text-align:right">{fmt_brl(pmt_m)}/mês</td></tr>
+                        <tr><td><b>Diferença por parcela:</b></td><td style="text-align:right">{fmt_brl(pmt_c - pmt_m)}/mês</td></tr>
+                        <tr><td><b>Total pago (contratado):</b></td><td style="text-align:right">{fmt_brl(total_c)}</td></tr>
+                        <tr><td><b>Total correto (mercado):</b></td><td style="text-align:right">{fmt_brl(total_m)}</td></tr>
+                        <tr><td><b>Excesso cobrado:</b></td><td style="text-align:right">{fmt_brl(excesso)}</td></tr>
+                    </table>
+                </div>""", unsafe_allow_html=True)
+
+                mult = "× 2 (dobro CDC art. 42)" if rev_dobro else "× 1 (simples)"
+                st.markdown(f"""<div class="total-card">
+                    <table>
+                        <tr><td><b>VALOR DA CAUSA {mult}:</b></td>
+                        <td style="text-align:right;font-size:1.3em">{fmt_brl(valor_causa)}</td></tr>
+                    </table>
+                </div>""", unsafe_allow_html=True)
+
+                st.caption(f"• Cálculo: Sistema Price (Tabela Francês) · {rev_parcelas}x de {fmt_brl(pmt_c)} → {fmt_brl(pmt_m)}")
+                st.caption(f"• Série BCB {serie_bcb} · Referência: {rev_data.strftime('%m/%Y')} · Taxa média: {taxa_m:.4f}% a.m.")
+    st.stop()
 
 # ──────────────────────────────────────────────────────────────
 # RESUMO E TOTAIS  (modo-dependente)
@@ -2490,19 +2563,16 @@ with exp_col3:
 
 with exp_col4:
     if st.button("💾  Salvar no Histórico", use_container_width=True):
-        if numero_processo:
-            st.session_state.history.append({
-                "numero":    numero_processo,
-                "modo":      "Inicial" if IS_INICIAL else "Execução",
-                "exequente": exequente or "—",
-                "executado": executado or "—",
-                "data":      data_calculo.strftime("%d/%m/%Y"),
-                "total":     fmt_brl(total_geral),
-            })
-            st.success("✅ Salvo no histórico!")
-            st.rerun()
-        else:
-            st.warning("Informe o número do processo antes de salvar.")
+        st.session_state.history.append({
+            "numero":    numero_processo or "—",
+            "modo":      "Inicial" if IS_INICIAL else "Execução",
+            "exequente": exequente or "—",
+            "executado": executado or "—",
+            "data":      data_calculo.strftime("%d/%m/%Y"),
+            "total":     fmt_brl(total_geral),
+        })
+        st.success("✅ Salvo no histórico!")
+        st.rerun()
 
 # ──────────────────────────────────────────────────────────────
 # RODAPÉ
