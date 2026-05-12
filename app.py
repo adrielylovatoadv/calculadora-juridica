@@ -2186,10 +2186,26 @@ if IS_REVISIONAL:
             i = i_novo
         return i * 100.0 if i > 0 else None
 
+    def _corrigir_excesso(excesso_parcela: float, data_venc: date, data_calc: date, indices: dict) -> float:
+        """
+        Corrige excesso de uma parcela com INPC/IPCAe + juros mora fixos de 1% a.m. (simples).
+        Período: do mês de vencimento até o mês anterior ao cálculo.
+        """
+        if data_venc >= data_calc or excesso_parcela <= 0:
+            return excesso_parcela
+        fator_corr = 1.0
+        meses_mora = 0
+        for y, m in iter_months(data_venc, data_calc):
+            fator_corr *= 1.0 + get_correction_index(y, m, indices) / 100.0
+            meses_mora += 1
+        corrigido = excesso_parcela * fator_corr
+        mora = corrigido * meses_mora * 0.01  # 1% a.m. simples
+        return corrigido + mora
+
     nome_calc = "Veículo" if IS_REVISIONAL_VEI else "Empréstimo Não Consignado"
 
     st.markdown(f'<div class="section-header"><b>🔢 Revisional de {nome_calc}</b></div>', unsafe_allow_html=True)
-    st.caption("Sistema Price (Tabela Francês) — insira os dados do contrato e a taxa de referência para comparação")
+    st.caption("Sistema Price (Tabela Francês) — cada parcela em excesso é corrigida (INPC/IPCAe) + mora 1% a.m. desde o vencimento")
 
     rev_col1, rev_col2 = st.columns(2)
     with rev_col1:
@@ -2197,36 +2213,72 @@ if IS_REVISIONAL:
         rev_parcelas = st.number_input("📅 Número de Parcelas", min_value=1, max_value=360, value=48, step=1)
         rev_pmt_str = st.text_input("💳 Valor da Parcela Contratada (R$)", value="", placeholder="Ex: 1.850,00")
     with rev_col2:
+        rev_data_str = st.text_input("📋 Data da Contratação", value="", placeholder="DD/MM/AAAA")
         rev_taxa_ref_str = st.text_input("📉 Taxa de Referência / Mercado (% a.m.)", value="", placeholder="Ex: 1,80")
         rev_dobro = st.checkbox("× 2 — Repetição em dobro (CDC art. 42, §único)", value=True)
-        rev_calcular = st.button("🔢 Calcular", type="primary", use_container_width=True)
+    rev_calcular = st.button("🔢 Calcular", type="primary", use_container_width=True)
 
     if rev_calcular:
         erros = []
 
         try:
             pmt_c = float(rev_pmt_str.replace(".", "").replace(",", "."))
+            assert pmt_c > 0
         except Exception:
             pmt_c = 0.0
             erros.append("Informe o valor da parcela contratada corretamente (Ex: 1.850,00).")
 
         try:
             taxa_ref = float(rev_taxa_ref_str.replace(",", "."))
+            assert taxa_ref > 0
         except Exception:
             taxa_ref = 0.0
             erros.append("Informe a taxa de referência corretamente (Ex: 1,80).")
 
+        try:
+            rev_data = datetime.strptime(rev_data_str.strip(), "%d/%m/%Y").date()
+        except Exception:
+            rev_data = None
+            erros.append("Informe a data da contratação corretamente (DD/MM/AAAA).")
+
         for e in erros:
             st.error(e)
 
-        if not erros and rev_valor > 0 and pmt_c > 0 and taxa_ref > 0:
-            taxa_c = _taxa_implicita(rev_valor, pmt_c, rev_parcelas)
+        if not erros and rev_valor > 0 and pmt_c > 0 and taxa_ref > 0 and rev_data:
+            hoje_calc = date.today()
+            taxa_c  = _taxa_implicita(rev_valor, pmt_c, rev_parcelas)
             pmt_ref = _pmt(rev_valor, taxa_ref, rev_parcelas)
-            total_c   = pmt_c   * rev_parcelas
-            total_ref = pmt_ref * rev_parcelas
-            excesso   = total_c - total_ref
-            valor_causa = excesso * 2 if rev_dobro else excesso
+            diff_parcela = pmt_c - pmt_ref
 
+            # Corrigir cada parcela em excesso desde seu vencimento
+            total_c   = 0.0
+            total_ref = 0.0
+            excesso_bruto      = 0.0
+            excesso_corrigido  = 0.0
+
+            for k in range(1, rev_parcelas + 1):
+                # Vencimento da k-ésima parcela (mês a mês a partir da contratação)
+                mes_venc = rev_data.month + k
+                ano_venc = rev_data.year + (mes_venc - 1) // 12
+                mes_venc = ((mes_venc - 1) % 12) + 1
+                try:
+                    data_venc_k = date(ano_venc, mes_venc, rev_data.day)
+                except ValueError:
+                    import calendar as _cal
+                    data_venc_k = date(ano_venc, mes_venc, _cal.monthrange(ano_venc, mes_venc)[1])
+
+                total_c   += pmt_c
+                total_ref += pmt_ref
+                excesso_bruto += diff_parcela
+                # Só corrige parcelas com vencimento no passado
+                if data_venc_k < hoje_calc and diff_parcela > 0:
+                    excesso_corrigido += _corrigir_excesso(diff_parcela, data_venc_k, hoje_calc, indices)
+                elif diff_parcela > 0:
+                    excesso_corrigido += diff_parcela  # parcelas futuras sem correção
+
+            valor_causa = excesso_corrigido * 2 if rev_dobro else excesso_corrigido
+
+            # ── Resultados ──────────────────────────────────────────────────
             st.markdown('<div class="section-header"><b>📊 Resultado do Revisional</b></div>', unsafe_allow_html=True)
 
             rc1, rc2, rc3 = st.columns(3)
@@ -2240,11 +2292,12 @@ if IS_REVISIONAL:
                 <table>
                     <tr><td><b>Parcela contratada:</b></td><td style="text-align:right">{fmt_brl(pmt_c)}/mês</td></tr>
                     <tr><td><b>Parcela com taxa de referência:</b></td><td style="text-align:right">{fmt_brl(pmt_ref)}/mês</td></tr>
-                    <tr><td><b>Diferença por parcela:</b></td><td style="text-align:right"><b>{fmt_brl(pmt_c - pmt_ref)}/mês</b></td></tr>
+                    <tr><td><b>Diferença por parcela:</b></td><td style="text-align:right"><b>{fmt_brl(diff_parcela)}/mês</b></td></tr>
                     <tr><td colspan="2"><hr style="margin:4px 0;border-color:#2d3748;"></td></tr>
                     <tr><td><b>Total pago (contratado):</b></td><td style="text-align:right">{fmt_brl(total_c)}</td></tr>
                     <tr><td><b>Total correto (referência):</b></td><td style="text-align:right">{fmt_brl(total_ref)}</td></tr>
-                    <tr><td><b>Excesso cobrado:</b></td><td style="text-align:right"><b>{fmt_brl(excesso)}</b></td></tr>
+                    <tr><td><b>Excesso bruto cobrado:</b></td><td style="text-align:right">{fmt_brl(excesso_bruto)}</td></tr>
+                    <tr><td><b>Excesso corrigido (INPC/IPCAe + 1% mora):</b></td><td style="text-align:right"><b>{fmt_brl(excesso_corrigido)}</b></td></tr>
                 </table>
             </div>""", unsafe_allow_html=True)
 
@@ -2257,8 +2310,9 @@ if IS_REVISIONAL:
             </div>""", unsafe_allow_html=True)
 
             if taxa_c:
-                st.caption(f"• Taxa implícita calculada por Newton-Raphson (Price) · {rev_parcelas}x de {fmt_brl(pmt_c)}")
-                st.caption(f"• Parcela com taxa de referência ({taxa_ref:.4f}% a.m.): {fmt_brl(pmt_ref)} · Diferença: {fmt_brl(pmt_c - pmt_ref)}/mês")
+                st.caption(f"• Taxa implícita: {taxa_c:.4f}% a.m. (Newton-Raphson / Price) · Referência: {taxa_ref:.4f}% a.m.")
+            st.caption(f"• Correção monetária: INPC (até ago/2024) → IPCAe (set/2024 em diante) · Mora: 1% a.m. simples sobre cada parcela vencida")
+            st.caption(f"• Contratação: {rev_data.strftime('%d/%m/%Y')} · Cálculo até: {hoje_calc.strftime('%d/%m/%Y')} · {rev_parcelas} parcelas")
         elif not erros and rev_valor == 0:
             st.warning("Informe o Valor Financiado.")
 
