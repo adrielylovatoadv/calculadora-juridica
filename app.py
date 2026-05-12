@@ -2154,106 +2154,114 @@ if to_remove:
 # CALCULADORAS REVISIONAIS
 # ──────────────────────────────────────────────────────────────
 if IS_REVISIONAL:
-    BCB_SERIES_VEI = 20714   # Taxa média PF - Aquisição de veículos
-    BCB_SERIES_EMP = 25464   # Taxa média PF - Crédito pessoal não consignado
-
-    def _buscar_taxa_bcb(serie: int, ano: int, mes: int) -> float | None:
-        """Busca a taxa média do BCB para o mês/ano da contratação."""
-        url = f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.{serie}/dados?formato=json&dataInicial=01/{mes:02d}/{ano}&dataFinal=28/{mes:02d}/{ano}"
-        try:
-            import requests as _req
-            resp = _req.get(url, timeout=15)
-            resp.raise_for_status()
-            dados = resp.json()
-            if dados:
-                return float(str(dados[-1]["valor"]).replace(",", "."))
-        except Exception:
-            pass
-        return None
 
     def _pmt(pv: float, i: float, n: int) -> float:
-        """Calcula prestação pelo Sistema Francês (Price). i em % a.m."""
-        if i == 0 or n == 0:
-            return pv / n if n else 0
+        """Prestação pelo Sistema Price. i em % a.m."""
+        if n == 0:
+            return 0.0
+        if i == 0:
+            return pv / n
         ir = i / 100.0
         return pv * ir / (1 - (1 + ir) ** (-n))
 
+    def _taxa_implicita(pv: float, pmt: float, n: int) -> float | None:
+        """Calcula taxa implícita (IRR) pelo método de Newton-Raphson. Retorna % a.m."""
+        if pv <= 0 or pmt <= 0 or n <= 0:
+            return None
+        # Chute inicial: taxa simples aproximada
+        i = (pmt * n / pv - 1) / n
+        if i <= 0:
+            i = 0.01
+        for _ in range(1000):
+            fi = pmt - pv * i / (1 - (1 + i) ** (-n))
+            dfi = -pv * ((1 - (1 + i) ** (-n)) - i * n * (1 + i) ** (-n - 1)) / (1 - (1 + i) ** (-n)) ** 2
+            if abs(dfi) < 1e-15:
+                break
+            i_novo = i - fi / dfi
+            if i_novo <= 0:
+                i_novo = i / 2
+            if abs(i_novo - i) < 1e-10:
+                i = i_novo
+                break
+            i = i_novo
+        return i * 100.0 if i > 0 else None
+
     nome_calc = "Veículo" if IS_REVISIONAL_VEI else "Empréstimo Não Consignado"
-    serie_bcb = BCB_SERIES_VEI if IS_REVISIONAL_VEI else BCB_SERIES_EMP
 
     st.markdown(f'<div class="section-header"><b>🔢 Revisional de {nome_calc}</b></div>', unsafe_allow_html=True)
-    st.caption(f"Série BCB: {serie_bcb} · {'Taxa média – PF – Aquisição de veículos' if IS_REVISIONAL_VEI else 'Taxa média – PF – Crédito pessoal não consignado'}")
+    st.caption("Sistema Price (Tabela Francês) — insira os dados do contrato e a taxa de referência para comparação")
 
     rev_col1, rev_col2 = st.columns(2)
     with rev_col1:
         rev_valor = st.number_input("💰 Valor Financiado (R$)", min_value=0.0, value=0.0, step=100.0, format="%.2f")
         rev_parcelas = st.number_input("📅 Número de Parcelas", min_value=1, max_value=360, value=48, step=1)
-        rev_taxa_str = st.text_input("📈 Taxa Contratada (% a.m.)", value="", placeholder="Ex: 2,50")
+        rev_pmt_str = st.text_input("💳 Valor da Parcela Contratada (R$)", value="", placeholder="Ex: 1.850,00")
     with rev_col2:
-        rev_data_str = st.text_input("📋 Data da Contratação", value="", placeholder="DD/MM/AAAA")
+        rev_taxa_ref_str = st.text_input("📉 Taxa de Referência / Mercado (% a.m.)", value="", placeholder="Ex: 1,80")
         rev_dobro = st.checkbox("× 2 — Repetição em dobro (CDC art. 42, §único)", value=True)
-        rev_buscar = st.button("🔍 Buscar Taxa Média BCB e Calcular", type="primary", use_container_width=True)
+        rev_calcular = st.button("🔢 Calcular", type="primary", use_container_width=True)
 
-    if rev_buscar and rev_valor > 0:
-        try:
-            taxa_c = float(rev_taxa_str.replace(",", "."))
-        except Exception:
-            taxa_c = 0.0
-            st.error("Informe a taxa contratada corretamente.")
+    if rev_calcular:
+        erros = []
 
         try:
-            rev_data = datetime.strptime(rev_data_str.strip(), "%d/%m/%Y").date()
+            pmt_c = float(rev_pmt_str.replace(".", "").replace(",", "."))
         except Exception:
-            rev_data = None
-            st.error("Informe a data da contratação corretamente (DD/MM/AAAA).")
+            pmt_c = 0.0
+            erros.append("Informe o valor da parcela contratada corretamente (Ex: 1.850,00).")
 
-        if taxa_c > 0 and rev_data and rev_parcelas > 0:
-            with st.spinner(f"Buscando taxa média BCB (série {serie_bcb}) para {rev_data.strftime('%m/%Y')}…"):
-                taxa_m = _buscar_taxa_bcb(serie_bcb, rev_data.year, rev_data.month)
+        try:
+            taxa_ref = float(rev_taxa_ref_str.replace(",", "."))
+        except Exception:
+            taxa_ref = 0.0
+            erros.append("Informe a taxa de referência corretamente (Ex: 1,80).")
 
-            if taxa_m is None:
-                st.warning(f"⚠️ Não foi possível obter a taxa média do BCB para {rev_data.strftime('%m/%Y')}. Verifique a conexão ou insira a taxa manualmente.")
-                taxa_m_str = st.text_input("Taxa Média Mercado (% a.m.) — manual:", value="", placeholder="Ex: 1,80")
-                try:
-                    taxa_m = float(taxa_m_str.replace(",", ".")) if taxa_m_str else None
-                except Exception:
-                    taxa_m = None
+        for e in erros:
+            st.error(e)
 
-            if taxa_m is not None:
-                pmt_c = _pmt(rev_valor, taxa_c, rev_parcelas)
-                pmt_m = _pmt(rev_valor, taxa_m, rev_parcelas)
-                total_c = pmt_c * rev_parcelas
-                total_m = pmt_m * rev_parcelas
-                excesso = total_c - total_m
-                valor_causa = excesso * 2 if rev_dobro else excesso
+        if not erros and rev_valor > 0 and pmt_c > 0 and taxa_ref > 0:
+            taxa_c = _taxa_implicita(rev_valor, pmt_c, rev_parcelas)
+            pmt_ref = _pmt(rev_valor, taxa_ref, rev_parcelas)
+            total_c   = pmt_c   * rev_parcelas
+            total_ref = pmt_ref * rev_parcelas
+            excesso   = total_c - total_ref
+            valor_causa = excesso * 2 if rev_dobro else excesso
 
-                st.markdown('<div class="section-header"><b>📊 Resultado do Revisional</b></div>', unsafe_allow_html=True)
-                rc1, rc2, rc3 = st.columns(3)
-                rc1.metric("Taxa Contratada", f"{taxa_c:.4f}% a.m.")
-                rc2.metric(f"Taxa Média Mercado ({rev_data.strftime('%m/%Y')})", f"{taxa_m:.4f}% a.m.")
-                rc3.metric("Diferença de Taxa", f"{taxa_c - taxa_m:.4f}% a.m.")
+            st.markdown('<div class="section-header"><b>📊 Resultado do Revisional</b></div>', unsafe_allow_html=True)
 
-                st.markdown(f"""<div class="result-card">
-                    <table>
-                        <tr><td><b>Prestação contratada:</b></td><td style="text-align:right">{fmt_brl(pmt_c)}/mês</td></tr>
-                        <tr><td><b>Prestação à taxa de mercado:</b></td><td style="text-align:right">{fmt_brl(pmt_m)}/mês</td></tr>
-                        <tr><td><b>Diferença por parcela:</b></td><td style="text-align:right">{fmt_brl(pmt_c - pmt_m)}/mês</td></tr>
-                        <tr><td><b>Total pago (contratado):</b></td><td style="text-align:right">{fmt_brl(total_c)}</td></tr>
-                        <tr><td><b>Total correto (mercado):</b></td><td style="text-align:right">{fmt_brl(total_m)}</td></tr>
-                        <tr><td><b>Excesso cobrado:</b></td><td style="text-align:right">{fmt_brl(excesso)}</td></tr>
-                    </table>
-                </div>""", unsafe_allow_html=True)
+            rc1, rc2, rc3 = st.columns(3)
+            rc1.metric("Taxa Contratada (implícita)", f"{taxa_c:.4f}% a.m." if taxa_c else "N/D")
+            rc2.metric("Taxa de Referência", f"{taxa_ref:.4f}% a.m.")
+            if taxa_c:
+                rc3.metric("Diferença de Taxa", f"{taxa_c - taxa_ref:.4f}% a.m.",
+                           delta=f"{taxa_c - taxa_ref:+.4f}%", delta_color="inverse")
 
-                mult = "× 2 (dobro CDC art. 42)" if rev_dobro else "× 1 (simples)"
-                st.markdown(f"""<div class="total-card">
-                    <table>
-                        <tr><td><b>VALOR DA CAUSA {mult}:</b></td>
-                        <td style="text-align:right;font-size:1.3em">{fmt_brl(valor_causa)}</td></tr>
-                    </table>
-                </div>""", unsafe_allow_html=True)
+            st.markdown(f"""<div class="result-card">
+                <table>
+                    <tr><td><b>Parcela contratada:</b></td><td style="text-align:right">{fmt_brl(pmt_c)}/mês</td></tr>
+                    <tr><td><b>Parcela com taxa de referência:</b></td><td style="text-align:right">{fmt_brl(pmt_ref)}/mês</td></tr>
+                    <tr><td><b>Diferença por parcela:</b></td><td style="text-align:right"><b>{fmt_brl(pmt_c - pmt_ref)}/mês</b></td></tr>
+                    <tr><td colspan="2"><hr style="margin:4px 0;border-color:#2d3748;"></td></tr>
+                    <tr><td><b>Total pago (contratado):</b></td><td style="text-align:right">{fmt_brl(total_c)}</td></tr>
+                    <tr><td><b>Total correto (referência):</b></td><td style="text-align:right">{fmt_brl(total_ref)}</td></tr>
+                    <tr><td><b>Excesso cobrado:</b></td><td style="text-align:right"><b>{fmt_brl(excesso)}</b></td></tr>
+                </table>
+            </div>""", unsafe_allow_html=True)
 
-                st.caption(f"• Cálculo: Sistema Price (Tabela Francês) · {rev_parcelas}x de {fmt_brl(pmt_c)} → {fmt_brl(pmt_m)}")
-                st.caption(f"• Série BCB {serie_bcb} · Referência: {rev_data.strftime('%m/%Y')} · Taxa média: {taxa_m:.4f}% a.m.")
+            mult = "× 2 (dobro CDC art. 42, §único)" if rev_dobro else "× 1 (simples)"
+            st.markdown(f"""<div class="total-card">
+                <table>
+                    <tr><td><b>VALOR DA CAUSA {mult}:</b></td>
+                    <td style="text-align:right;font-size:1.3em"><b>{fmt_brl(valor_causa)}</b></td></tr>
+                </table>
+            </div>""", unsafe_allow_html=True)
+
+            if taxa_c:
+                st.caption(f"• Taxa implícita calculada por Newton-Raphson (Price) · {rev_parcelas}x de {fmt_brl(pmt_c)}")
+                st.caption(f"• Parcela com taxa de referência ({taxa_ref:.4f}% a.m.): {fmt_brl(pmt_ref)} · Diferença: {fmt_brl(pmt_c - pmt_ref)}/mês")
+        elif not erros and rev_valor == 0:
+            st.warning("Informe o Valor Financiado.")
+
     st.stop()
 
 # ──────────────────────────────────────────────────────────────
