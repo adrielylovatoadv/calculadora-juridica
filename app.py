@@ -77,9 +77,10 @@ st.markdown(
         padding: 14px 18px;
         margin: 8px 0;
         font-size: 0.97em;
+        color: #1a202c !important;
     }
-    .result-card table { width: 100%; border-collapse: collapse; }
-    .result-card tr td { padding: 3px 0; }
+    .result-card table { width: 100%; border-collapse: collapse; color: #1a202c; }
+    .result-card tr td { padding: 3px 0; color: #1a202c; }
 
     .total-card {
         background: linear-gradient(135deg, #1a3a6b 0%, #2c5282 100%);
