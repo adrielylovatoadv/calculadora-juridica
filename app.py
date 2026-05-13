@@ -2156,7 +2156,6 @@ if to_remove:
 if IS_REVISIONAL:
 
     def _pmt(pv: float, i: float, n: int) -> float:
-        """Prestação pelo Sistema Price. i em % a.m."""
         if n == 0:
             return 0.0
         if i == 0:
@@ -2165,15 +2164,13 @@ if IS_REVISIONAL:
         return pv * ir / (1 - (1 + ir) ** (-n))
 
     def _taxa_implicita(pv: float, pmt: float, n: int) -> float | None:
-        """Calcula taxa implícita (IRR) pelo método de Newton-Raphson. Retorna % a.m."""
         if pv <= 0 or pmt <= 0 or n <= 0:
             return None
-        # Chute inicial: taxa simples aproximada
         i = (pmt * n / pv - 1) / n
         if i <= 0:
             i = 0.01
         for _ in range(1000):
-            fi = pmt - pv * i / (1 - (1 + i) ** (-n))
+            fi  = pmt - pv * i / (1 - (1 + i) ** (-n))
             dfi = -pv * ((1 - (1 + i) ** (-n)) - i * n * (1 + i) ** (-n - 1)) / (1 - (1 + i) ** (-n)) ** 2
             if abs(dfi) < 1e-15:
                 break
@@ -2187,10 +2184,6 @@ if IS_REVISIONAL:
         return i * 100.0 if i > 0 else None
 
     def _corrigir_excesso(excesso_parcela: float, data_venc: date, data_calc: date, indices: dict) -> float:
-        """
-        Corrige excesso de uma parcela com INPC/IPCAe + juros mora fixos de 1% a.m. (simples).
-        Período: do mês de vencimento até o mês anterior ao cálculo.
-        """
         if data_venc >= data_calc or excesso_parcela <= 0:
             return excesso_parcela
         fator_corr = 1.0
@@ -2199,122 +2192,364 @@ if IS_REVISIONAL:
             fator_corr *= 1.0 + get_correction_index(y, m, indices) / 100.0
             meses_mora += 1
         corrigido = excesso_parcela * fator_corr
-        mora = corrigido * meses_mora * 0.01  # 1% a.m. simples
+        mora = corrigido * meses_mora * 0.01
         return corrigido + mora
 
+    def _export_pdf_revisional(res: dict) -> BytesIO:
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import cm
+        from reportlab.lib import colors
+        from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
+
+        DARK_BLUE  = colors.HexColor("#1A3A6B")
+        MED_BLUE   = colors.HexColor("#2C5282")
+        ROW_EVEN   = colors.HexColor("#EBF4FF")
+        WHITE      = colors.white
+
+        buf = BytesIO()
+        doc = SimpleDocTemplate(buf, pagesize=(21*cm, 29.7*cm),
+                                 leftMargin=2.5*cm, rightMargin=2.5*cm,
+                                 topMargin=2.5*cm, bottomMargin=2.0*cm)
+        styles = getSampleStyleSheet()
+        title_s = ParagraphStyle("T", parent=styles["Title"], fontName="Helvetica-Bold",
+                                  fontSize=14, textColor=DARK_BLUE, alignment=TA_CENTER, spaceAfter=4)
+        sub_s   = ParagraphStyle("S", parent=styles["Normal"], fontName="Helvetica-Bold",
+                                  fontSize=11, textColor=MED_BLUE, alignment=TA_CENTER, spaceAfter=10)
+        sec_s   = ParagraphStyle("H", parent=styles["Heading2"], fontName="Helvetica-Bold",
+                                  fontSize=11, textColor=DARK_BLUE, spaceBefore=8, spaceAfter=4)
+        body_s  = ParagraphStyle("B", parent=styles["Normal"], fontName="Helvetica", fontSize=9, spaceAfter=3)
+
+        def row(lbl, val, bold_val=False):
+            v = f"<b>{val}</b>" if bold_val else val
+            return [Paragraph(f"<b><font color='white'>{lbl}</font></b>", body_s),
+                    Paragraph(v, body_s)]
+
+        def make_table(rows_data, col_widths):
+            t = Table(rows_data, colWidths=col_widths)
+            t.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (0, -1), MED_BLUE),
+                ("BACKGROUND", (1, 0), (1, -1), WHITE),
+                ("GRID",       (0, 0), (-1, -1), 0.3, colors.grey),
+                ("VALIGN",     (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING",    (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]))
+            return t
+
+        def make_results_table(rows_data):
+            t = Table(rows_data, colWidths=[10.5*cm, 5.5*cm])
+            ts_list = [
+                ("GRID",       (0, 0), (-1, -1), 0.3, colors.grey),
+                ("VALIGN",     (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING",    (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]
+            for i in range(len(rows_data)):
+                bg = ROW_EVEN if i % 2 == 0 else WHITE
+                ts_list.append(("BACKGROUND", (0, i), (-1, i), bg))
+            t.setStyle(TableStyle(ts_list))
+            return t
+
+        story = []
+        nome_c = res["nome_calc"]
+        story.append(Paragraph(f"REVISIONAL DE {nome_c.upper()}", title_s))
+        story.append(Paragraph("PLANILHA DE EXCESSO DE JUROS — SISTEMA PRICE", sub_s))
+        story.append(Spacer(1, 4))
+
+        # Dados do cálculo
+        story.append(Paragraph("DADOS DO CONTRATO", sec_s))
+        info_data = [
+            row("Data do Cálculo:", res["data_calc"]),
+            row("Data da Contratação:", res["data_contrat"]),
+            row("Valor Financiado (PV):", fmt_brl(res["pv"])),
+            row("Número de Parcelas:", str(res["n"])),
+            row("Parcela Contratada:", f"{fmt_brl(res['pmt_c'])}/mês"),
+            row("Taxa Implícita Contratada:", f"{res['taxa_c']:.4f}% a.m." if res.get("taxa_c") else "N/D"),
+        ]
+        story.append(make_table(info_data, [5.5*cm, 10.5*cm]))
+        story.append(Spacer(1, 8))
+
+        # Comparativo BACEN
+        story.append(Paragraph("COMPARATIVO — TAXA MÉDIA DE MERCADO (BACEN)", sec_s))
+        bacen_data = [
+            row("Taxa de Referência (BACEN):", f"{res['taxa_ref']:.4f}% a.m."),
+            row("Parcela com Taxa de Referência:", f"{fmt_brl(res['pmt_ref'])}/mês"),
+            row("Diferença por Parcela:", f"{fmt_brl(res['diff_parcela'])}/mês", bold_val=True),
+        ]
+        story.append(make_table(bacen_data, [7.0*cm, 9.0*cm]))
+        story.append(Spacer(1, 8))
+
+        # Resultado do excesso
+        story.append(Paragraph("APURAÇÃO DO EXCESSO COBRADO", sec_s))
+        exc_rows = [
+            [Paragraph("<b>Descrição</b>", body_s), Paragraph("<b>Valor (R$)</b>", body_s)],
+            [Paragraph("Total pago — tarifa contratada:", body_s),
+             Paragraph(fmt_brl(res["total_c"]), ParagraphStyle("rv", fontName="Helvetica", fontSize=9, alignment=TA_RIGHT))],
+            [Paragraph("Total correto — taxa de referência:", body_s),
+             Paragraph(fmt_brl(res["total_ref"]), ParagraphStyle("rv2", fontName="Helvetica", fontSize=9, alignment=TA_RIGHT))],
+            [Paragraph("Excesso bruto cobrado:", body_s),
+             Paragraph(fmt_brl(res["excesso_bruto"]), ParagraphStyle("rv3", fontName="Helvetica", fontSize=9, alignment=TA_RIGHT))],
+            [Paragraph("<b>Excesso corrigido (INPC/IPCAe + 1% mora a.m.):</b>", body_s),
+             Paragraph(f"<b>{fmt_brl(res['excesso_corrigido'])}</b>", ParagraphStyle("rv4", fontName="Helvetica-Bold", fontSize=9, alignment=TA_RIGHT))],
+        ]
+        et = Table(exc_rows, colWidths=[10.5*cm, 5.5*cm])
+        et.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), DARK_BLUE),
+            ("TEXTCOLOR",  (0, 0), (-1, 0), WHITE),
+            ("GRID",       (0, 0), (-1, -1), 0.3, colors.grey),
+            ("VALIGN",     (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING",    (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("BACKGROUND", (0, 2), (-1, 2), ROW_EVEN),
+            ("BACKGROUND", (0, 4), (-1, 4), colors.HexColor("#dbeafe")),
+        ]))
+        story.append(et)
+        story.append(Spacer(1, 10))
+
+        # Valor da causa
+        story.append(Paragraph("VALOR DA CAUSA", sec_s))
+        mult_txt = "× 2 — Repetição em dobro (CDC art. 42, §único)" if res["dobro"] else "× 1 (simples)"
+        vc_rows = [[Paragraph(f"<b>{mult_txt}</b>", body_s),
+                    Paragraph(f"<b>{fmt_brl(res['excesso_corrigido'])} × {'2' if res['dobro'] else '1'}</b>",
+                               ParagraphStyle("vc", fontName="Helvetica-Bold", fontSize=9, alignment=TA_RIGHT))]]
+        if res.get("dano_moral", 0) > 0:
+            vc_rows.append([Paragraph("( + ) Dano Moral:", body_s),
+                            Paragraph(fmt_brl(res["dano_moral"]),
+                                       ParagraphStyle("dm", fontName="Helvetica", fontSize=9, alignment=TA_RIGHT))])
+        vc_rows.append([Paragraph("<b>VALOR TOTAL DA CAUSA:</b>", body_s),
+                        Paragraph(f"<b>{fmt_brl(res['valor_causa'])}</b>",
+                                   ParagraphStyle("vtc", fontName="Helvetica-Bold", fontSize=11, alignment=TA_RIGHT,
+                                                   textColor=DARK_BLUE))])
+        vt = Table(vc_rows, colWidths=[10.5*cm, 5.5*cm])
+        vt.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#dbeafe")),
+            ("BACKGROUND", (0, len(vc_rows)-1), (-1, len(vc_rows)-1), colors.HexColor("#bfdbfe")),
+            ("GRID",       (0, 0), (-1, -1), 0.3, colors.grey),
+            ("VALIGN",     (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        story.append(vt)
+        story.append(Spacer(1, 12))
+
+        # Notas
+        nota_s = ParagraphStyle("N", parent=styles["Normal"], fontName="Helvetica", fontSize=7,
+                                  textColor=colors.grey, spaceAfter=3)
+        story.append(Paragraph("• Correção monetária: INPC (séries 188, BCB) até ago/2024; IPCAe (série 10764, BCB) a partir de set/2024", nota_s))
+        story.append(Paragraph("• Juros de mora: 1% ao mês (simples), aplicados sobre o valor já corrigido de cada parcela", nota_s))
+        story.append(Paragraph(f"• Base de cálculo: Sistema Price (Tabela Francês) | Cálculo gerado em {res['data_calc']}", nota_s))
+
+        doc.build(story)
+        buf.seek(0)
+        return buf
+
+    # ── Cabeçalho ───────────────────────────────────────────────────────────────
     nome_calc = "Veículo" if IS_REVISIONAL_VEI else "Empréstimo Não Consignado"
-
     st.markdown(f'<div class="section-header"><b>🔢 Revisional de {nome_calc}</b></div>', unsafe_allow_html=True)
-    st.caption("Sistema Price (Tabela Francês) — cada parcela em excesso é corrigida (INPC/IPCAe) + mora 1% a.m. desde o vencimento")
+    st.caption("Sistema Price (Tabela Francês) — calcule a taxa implícita e compare com a taxa de mercado BACEN")
 
-    rev_col1, rev_col2 = st.columns(2)
-    with rev_col1:
-        rev_valor = st.number_input("💰 Valor Financiado (R$)", min_value=0.0, value=0.0, step=100.0, format="%.2f")
-        rev_parcelas = st.number_input("📅 Número de Parcelas", min_value=1, max_value=360, value=48, step=1)
-        rev_pmt_str = st.text_input("💳 Valor da Parcela Contratada (R$)", value="", placeholder="Ex: 1.850,00")
-    with rev_col2:
-        rev_data_str = st.text_input("📋 Data da Contratação", value="", placeholder="DD/MM/AAAA")
-        rev_taxa_ref_str = st.text_input("📉 Taxa de Referência / Mercado (% a.m.)", value="", placeholder="Ex: 1,80")
-        rev_dobro = st.checkbox("× 2 — Repetição em dobro (CDC art. 42, §único)", value=True)
-    rev_calcular = st.button("🔢 Calcular", type="primary", use_container_width=True)
+    # ── Inputs compartilhados ───────────────────────────────────────────────────
+    sh1, sh2 = st.columns(2)
+    rev_valor    = sh1.number_input("💰 Valor Financiado (R$)", min_value=0.0, value=0.0, step=100.0, format="%.2f")
+    rev_parcelas = sh2.number_input("📅 Número de Parcelas", min_value=1, max_value=360, value=48, step=1)
 
-    if rev_calcular:
-        erros = []
+    st.markdown("---")
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SEÇÃO 1 — CÁLCULO DO CONTRATO (taxa implícita)
+    # ═══════════════════════════════════════════════════════════════════════════
+    st.markdown('<div class="section-header"><b>📄 1. Cálculo do Contrato</b></div>', unsafe_allow_html=True)
+    st.caption("Informe o valor da parcela cobrada para identificar a taxa de juros implícita aplicada no contrato.")
+
+    rev_pmt_str = st.text_input("💳 Valor da Parcela Contratada (R$)", value="",
+                                 placeholder="Ex: 1.850,00", key="rev_pmt_str")
+
+    if st.button("🔍 Identificar Taxa Contratada", use_container_width=True, key="btn_taxa"):
+        try:
+            pmt_c_try = float(rev_pmt_str.replace(".", "").replace(",", "."))
+            assert pmt_c_try > 0
+        except Exception:
+            pmt_c_try = 0.0
+        if rev_valor <= 0:
+            st.error("Informe o Valor Financiado acima.")
+        elif pmt_c_try <= 0:
+            st.error("Informe o valor da parcela contratada corretamente (Ex: 1.850,00).")
+        else:
+            taxa_c_calc = _taxa_implicita(rev_valor, pmt_c_try, rev_parcelas)
+            st.session_state["rev_taxa_c"]   = taxa_c_calc
+            st.session_state["rev_pmt_c"]    = pmt_c_try
+            st.session_state["rev_valor_s1"] = rev_valor
+            st.session_state["rev_n_s1"]     = rev_parcelas
+
+    if "rev_taxa_c" in st.session_state and st.session_state.get("rev_valor_s1", 0) > 0:
+        _tc = st.session_state["rev_taxa_c"]
+        _pc = st.session_state["rev_pmt_c"]
+        _pv = st.session_state["rev_valor_s1"]
+        _n  = st.session_state["rev_n_s1"]
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Valor Financiado", fmt_brl(_pv))
+        m2.metric("Parcela Contratada", f"{fmt_brl(_pc)}/mês")
+        m3.metric("Taxa Implícita", f"{_tc:.4f}% a.m." if _tc else "N/D")
+        if _tc:
+            _total_c_s1 = _pc * _n
+            st.caption(f"Total a pagar pelo contrato: {fmt_brl(_total_c_s1)} ({_n} parcelas × {fmt_brl(_pc)})")
+
+    st.markdown("---")
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SEÇÃO 2 — TAXA MÉDIA DE MERCADO (BACEN)
+    # ═══════════════════════════════════════════════════════════════════════════
+    st.markdown('<div class="section-header"><b>📉 2. Taxa Média de Mercado (BACEN)</b></div>', unsafe_allow_html=True)
+    st.caption("Informe a taxa de referência para calcular o excesso cobrado e o valor da causa.")
+
+    s2c1, s2c2 = st.columns(2)
+    rev_data_str     = s2c1.text_input("📋 Data da Contratação", value="", placeholder="DD/MM/AAAA", key="rev_data")
+    rev_taxa_ref_str = s2c2.text_input("📉 Taxa de Referência / Mercado (% a.m.)", value="",
+                                        placeholder="Ex: 1,80", key="rev_taxa_ref")
+
+    s2c3, s2c4 = st.columns(2)
+    rev_dobro    = s2c3.checkbox("× 2 — Repetição em dobro (CDC art. 42, §único)", value=True)
+    dano_moral_r = s2c4.number_input("⚖️ Dano Moral (R$, opcional)", min_value=0.0, value=0.0,
+                                      step=500.0, format="%.2f")
+
+    if st.button("🔢 Calcular Excesso e Valor da Causa", type="primary", use_container_width=True, key="btn_excesso"):
+        erros2 = []
 
         try:
-            pmt_c = float(rev_pmt_str.replace(".", "").replace(",", "."))
-            assert pmt_c > 0
+            pmt_c2 = float(rev_pmt_str.replace(".", "").replace(",", "."))
+            assert pmt_c2 > 0
         except Exception:
-            pmt_c = 0.0
-            erros.append("Informe o valor da parcela contratada corretamente (Ex: 1.850,00).")
+            pmt_c2 = st.session_state.get("rev_pmt_c", 0.0)
 
         try:
-            taxa_ref = float(rev_taxa_ref_str.replace(",", "."))
-            assert taxa_ref > 0
+            taxa_ref2 = float(rev_taxa_ref_str.replace(",", "."))
+            assert taxa_ref2 > 0
         except Exception:
-            taxa_ref = 0.0
-            erros.append("Informe a taxa de referência corretamente (Ex: 1,80).")
+            taxa_ref2 = 0.0
+            erros2.append("Informe a taxa de referência corretamente (Ex: 1,80).")
 
         try:
-            rev_data = datetime.strptime(rev_data_str.strip(), "%d/%m/%Y").date()
+            rev_data2 = datetime.strptime(rev_data_str.strip(), "%d/%m/%Y").date()
         except Exception:
-            rev_data = None
-            erros.append("Informe a data da contratação corretamente (DD/MM/AAAA).")
+            rev_data2 = None
+            erros2.append("Informe a data da contratação corretamente (DD/MM/AAAA).")
 
-        for e in erros:
+        if rev_valor <= 0:
+            erros2.append("Informe o Valor Financiado acima.")
+        if pmt_c2 <= 0:
+            erros2.append("Informe (ou calcule) o Valor da Parcela Contratada na Seção 1.")
+
+        for e in erros2:
             st.error(e)
 
-        if not erros and rev_valor > 0 and pmt_c > 0 and taxa_ref > 0 and rev_data:
+        if not erros2:
             hoje_calc = date.today()
-            taxa_c  = _taxa_implicita(rev_valor, pmt_c, rev_parcelas)
-            pmt_ref = _pmt(rev_valor, taxa_ref, rev_parcelas)
-            diff_parcela = pmt_c - pmt_ref
+            taxa_c2   = st.session_state.get("rev_taxa_c") or _taxa_implicita(rev_valor, pmt_c2, rev_parcelas)
+            pmt_ref2  = _pmt(rev_valor, taxa_ref2, rev_parcelas)
+            diff_parc = pmt_c2 - pmt_ref2
 
-            # Corrigir cada parcela em excesso desde seu vencimento
-            total_c   = 0.0
-            total_ref = 0.0
-            excesso_bruto      = 0.0
-            excesso_corrigido  = 0.0
-
+            total_c2  = 0.0; total_ref2 = 0.0
+            exc_bruto = 0.0; exc_corrig = 0.0
             for k in range(1, rev_parcelas + 1):
-                # Vencimento da k-ésima parcela (mês a mês a partir da contratação)
-                mes_venc = rev_data.month + k
-                ano_venc = rev_data.year + (mes_venc - 1) // 12
-                mes_venc = ((mes_venc - 1) % 12) + 1
+                mes_v = rev_data2.month + k
+                ano_v = rev_data2.year + (mes_v - 1) // 12
+                mes_v = ((mes_v - 1) % 12) + 1
                 try:
-                    data_venc_k = date(ano_venc, mes_venc, rev_data.day)
+                    dv_k = date(ano_v, mes_v, rev_data2.day)
                 except ValueError:
                     import calendar as _cal
-                    data_venc_k = date(ano_venc, mes_venc, _cal.monthrange(ano_venc, mes_venc)[1])
+                    dv_k = date(ano_v, mes_v, _cal.monthrange(ano_v, mes_v)[1])
+                total_c2  += pmt_c2
+                total_ref2 += pmt_ref2
+                exc_bruto  += diff_parc
+                if diff_parc > 0:
+                    if dv_k < hoje_calc:
+                        exc_corrig += _corrigir_excesso(diff_parc, dv_k, hoje_calc, indices)
+                    else:
+                        exc_corrig += diff_parc
 
-                total_c   += pmt_c
-                total_ref += pmt_ref
-                excesso_bruto += diff_parcela
-                # Só corrige parcelas com vencimento no passado
-                if data_venc_k < hoje_calc and diff_parcela > 0:
-                    excesso_corrigido += _corrigir_excesso(diff_parcela, data_venc_k, hoje_calc, indices)
-                elif diff_parcela > 0:
-                    excesso_corrigido += diff_parcela  # parcelas futuras sem correção
+            subtotal_exc = exc_corrig * 2 if rev_dobro else exc_corrig
+            valor_causa2 = subtotal_exc + dano_moral_r
 
-            valor_causa = excesso_corrigido * 2 if rev_dobro else excesso_corrigido
+            st.session_state["rev_resultado"] = {
+                "nome_calc":       nome_calc,
+                "data_calc":       hoje_calc.strftime("%d/%m/%Y"),
+                "data_contrat":    rev_data2.strftime("%d/%m/%Y"),
+                "pv":              rev_valor,
+                "n":               rev_parcelas,
+                "pmt_c":           pmt_c2,
+                "taxa_c":          taxa_c2,
+                "taxa_ref":        taxa_ref2,
+                "pmt_ref":         pmt_ref2,
+                "diff_parcela":    diff_parc,
+                "total_c":         total_c2,
+                "total_ref":       total_ref2,
+                "excesso_bruto":   exc_bruto,
+                "excesso_corrigido": exc_corrig,
+                "dobro":           rev_dobro,
+                "dano_moral":      dano_moral_r,
+                "valor_causa":     valor_causa2,
+            }
 
-            # ── Resultados ──────────────────────────────────────────────────
-            st.markdown('<div class="section-header"><b>📊 Resultado do Revisional</b></div>', unsafe_allow_html=True)
+    if "rev_resultado" in st.session_state:
+        res = st.session_state["rev_resultado"]
+        tc  = res.get("taxa_c")
 
-            rc1, rc2, rc3 = st.columns(3)
-            rc1.metric("Taxa Contratada (implícita)", f"{taxa_c:.4f}% a.m." if taxa_c else "N/D")
-            rc2.metric("Taxa de Referência", f"{taxa_ref:.4f}% a.m.")
-            if taxa_c:
-                rc3.metric("Diferença de Taxa", f"{taxa_c - taxa_ref:.4f}% a.m.",
-                           delta=f"{taxa_c - taxa_ref:+.4f}%", delta_color="inverse")
+        st.markdown('<div class="section-header"><b>📊 Resultado do Revisional</b></div>', unsafe_allow_html=True)
 
-            st.markdown(f"""<div class="result-card">
-                <table>
-                    <tr><td><b>Parcela contratada:</b></td><td style="text-align:right">{fmt_brl(pmt_c)}/mês</td></tr>
-                    <tr><td><b>Parcela com taxa de referência:</b></td><td style="text-align:right">{fmt_brl(pmt_ref)}/mês</td></tr>
-                    <tr><td><b>Diferença por parcela:</b></td><td style="text-align:right"><b>{fmt_brl(diff_parcela)}/mês</b></td></tr>
-                    <tr><td colspan="2"><hr style="margin:4px 0;border-color:#2d3748;"></td></tr>
-                    <tr><td><b>Total pago (contratado):</b></td><td style="text-align:right">{fmt_brl(total_c)}</td></tr>
-                    <tr><td><b>Total correto (referência):</b></td><td style="text-align:right">{fmt_brl(total_ref)}</td></tr>
-                    <tr><td><b>Excesso bruto cobrado:</b></td><td style="text-align:right">{fmt_brl(excesso_bruto)}</td></tr>
-                    <tr><td><b>Excesso corrigido (INPC/IPCAe + 1% mora):</b></td><td style="text-align:right"><b>{fmt_brl(excesso_corrigido)}</b></td></tr>
-                </table>
-            </div>""", unsafe_allow_html=True)
+        rc1, rc2, rc3 = st.columns(3)
+        rc1.metric("Taxa Contratada (implícita)", f"{tc:.4f}% a.m." if tc else "N/D")
+        rc2.metric("Taxa de Referência (BACEN)",  f"{res['taxa_ref']:.4f}% a.m.")
+        if tc:
+            rc3.metric("Diferença de Taxa", f"{tc - res['taxa_ref']:.4f}% a.m.",
+                       delta=f"{tc - res['taxa_ref']:+.4f}%", delta_color="inverse")
 
-            mult = "× 2 (dobro CDC art. 42, §único)" if rev_dobro else "× 1 (simples)"
-            st.markdown(f"""<div class="total-card">
-                <table>
-                    <tr><td><b>VALOR DA CAUSA {mult}:</b></td>
-                    <td style="text-align:right;font-size:1.3em"><b>{fmt_brl(valor_causa)}</b></td></tr>
-                </table>
-            </div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="result-card"><table>
+            <tr><td><b>Parcela contratada:</b></td>
+                <td style="text-align:right">{fmt_brl(res['pmt_c'])}/mês</td></tr>
+            <tr><td><b>Parcela com taxa de referência (BACEN):</b></td>
+                <td style="text-align:right">{fmt_brl(res['pmt_ref'])}/mês</td></tr>
+            <tr><td><b>Diferença por parcela:</b></td>
+                <td style="text-align:right"><b>{fmt_brl(res['diff_parcela'])}/mês</b></td></tr>
+            <tr><td colspan="2"><hr style="margin:4px 0;border-color:#2d3748;"></td></tr>
+            <tr><td><b>Total pago (contratado):</b></td>
+                <td style="text-align:right">{fmt_brl(res['total_c'])}</td></tr>
+            <tr><td><b>Total correto (referência BACEN):</b></td>
+                <td style="text-align:right">{fmt_brl(res['total_ref'])}</td></tr>
+            <tr><td><b>Excesso bruto cobrado:</b></td>
+                <td style="text-align:right">{fmt_brl(res['excesso_bruto'])}</td></tr>
+            <tr><td><b>Excesso corrigido (INPC/IPCAe + 1% mora a.m.):</b></td>
+                <td style="text-align:right"><b>{fmt_brl(res['excesso_corrigido'])}</b></td></tr>
+        </table></div>""", unsafe_allow_html=True)
 
-            if taxa_c:
-                st.caption(f"• Taxa implícita: {taxa_c:.4f}% a.m. (Newton-Raphson / Price) · Referência: {taxa_ref:.4f}% a.m.")
-            st.caption(f"• Correção monetária: INPC (até ago/2024) → IPCAe (set/2024 em diante) · Mora: 1% a.m. simples sobre cada parcela vencida")
-            st.caption(f"• Contratação: {rev_data.strftime('%d/%m/%Y')} · Cálculo até: {hoje_calc.strftime('%d/%m/%Y')} · {rev_parcelas} parcelas")
-        elif not erros and rev_valor == 0:
-            st.warning("Informe o Valor Financiado.")
+        mult_txt = "× 2 (dobro CDC art. 42, §único)" if res["dobro"] else "× 1 (simples)"
+        dm_row = (f"<tr><td>( + ) Dano Moral:</td><td style='text-align:right'><b>{fmt_brl(res['dano_moral'])}</b></td></tr>"
+                  if res.get("dano_moral", 0) > 0 else "")
+        st.markdown(f"""<div class="total-card"><table>
+            <tr><td><b>Excesso corrigido {mult_txt}:</b></td>
+                <td style="text-align:right">{fmt_brl(res['excesso_corrigido'] * (2 if res['dobro'] else 1))}</td></tr>
+            {dm_row}
+            <tr><td><b>VALOR DA CAUSA:</b></td>
+                <td style="text-align:right;font-size:1.3em"><b>{fmt_brl(res['valor_causa'])}</b></td></tr>
+        </table></div>""", unsafe_allow_html=True)
+
+        st.caption(f"• Contratação: {res['data_contrat']} · Cálculo até: {res['data_calc']} · {res['n']} parcelas")
+        st.caption("• Correção: INPC (até ago/2024) → IPCAe (set/2024+) · Mora: 1% a.m. simples sobre cada parcela vencida")
+
+        # ── PDF ──────────────────────────────────────────────────────────────
+        try:
+            _pdf_rev = _export_pdf_revisional(res)
+            _safe    = res["data_calc"].replace("/", "")
+            st.download_button(
+                label="🖨️  Exportar PDF (.pdf)",
+                data=_pdf_rev,
+                file_name=f"revisional_{nome_calc.replace(' ','_')}_{_safe}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        except Exception as _ep:
+            st.error(f"Erro ao gerar PDF: {_ep}")
 
     st.stop()
 
