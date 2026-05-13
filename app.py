@@ -2280,8 +2280,8 @@ if IS_REVISIONAL:
         story.append(make_table(bacen_data, [7.0*cm, 9.0*cm]))
         story.append(Spacer(1, 8))
 
-        # Resultado do excesso
-        story.append(Paragraph("APURAÇÃO DO EXCESSO COBRADO", sec_s))
+        # Resultado do excesso de juros
+        story.append(Paragraph("APURAÇÃO DO EXCESSO DE JUROS", sec_s))
         exc_rows = [
             [Paragraph("<b>Descrição</b>", body_s), Paragraph("<b>Valor (R$)</b>", body_s)],
             [Paragraph("Total pago — tarifa contratada:", body_s),
@@ -2307,12 +2307,61 @@ if IS_REVISIONAL:
         story.append(et)
         story.append(Spacer(1, 10))
 
+        # Seguros indevidos
+        seguros_pdf = res.get("seguros", [])
+        if seguros_pdf:
+            story.append(Paragraph("SEGUROS INDEVIDOS", sec_s))
+            seg_hdr = [
+                Paragraph(f"<b><font color='white'>{h}</font></b>",
+                           ParagraphStyle("sh", fontName="Helvetica-Bold", fontSize=8, alignment=TA_CENTER, textColor=WHITE))
+                for h in ["Descrição", "Data Cobrança", "Valor Original (R$)", "Valor Corrigido (R$)"]
+            ]
+            seg_rows = [seg_hdr]
+            for si, sg in enumerate(seguros_pdf):
+                bg = ROW_EVEN if si % 2 == 0 else WHITE
+                seg_rows.append([
+                    Paragraph(sg.get("desc", ""), ParagraphStyle("sd", fontName="Helvetica", fontSize=8)),
+                    Paragraph(sg.get("data", ""),  ParagraphStyle("sd2", fontName="Helvetica", fontSize=8, alignment=TA_CENTER)),
+                    Paragraph(fmt_brl(sg.get("valor_orig", 0)), ParagraphStyle("sd3", fontName="Helvetica", fontSize=8, alignment=TA_RIGHT)),
+                    Paragraph(fmt_brl(sg.get("valor_corr", 0)), ParagraphStyle("sd4", fontName="Helvetica-Bold", fontSize=8, alignment=TA_RIGHT)),
+                ])
+            seg_rows.append([
+                Paragraph("<b>TOTAL SEGUROS CORRIGIDOS:</b>", body_s), Paragraph("", body_s),
+                Paragraph(fmt_brl(res.get("seguros_total_orig", 0)), ParagraphStyle("st3", fontName="Helvetica-Bold", fontSize=9, alignment=TA_RIGHT)),
+                Paragraph(f"<b>{fmt_brl(res.get('seguros_total_corr', 0))}</b>", ParagraphStyle("st4", fontName="Helvetica-Bold", fontSize=9, alignment=TA_RIGHT)),
+            ])
+            st_tbl = Table(seg_rows, colWidths=[5.5*cm, 2.5*cm, 3.0*cm, 3.5*cm], repeatRows=1)
+            seg_ts = [
+                ("BACKGROUND", (0, 0), (-1, 0), DARK_BLUE),
+                ("BACKGROUND", (0, len(seg_rows)-1), (-1, len(seg_rows)-1), colors.HexColor("#dbeafe")),
+                ("GRID",       (0, 0), (-1, -1), 0.3, colors.grey),
+                ("VALIGN",     (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING",    (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ("SPAN",       (0, len(seg_rows)-1), (1, len(seg_rows)-1)),
+            ]
+            for si in range(1, len(seg_rows) - 1):
+                bg = ROW_EVEN if (si - 1) % 2 == 0 else WHITE
+                seg_ts.append(("BACKGROUND", (0, si), (-1, si), bg))
+            st_tbl.setStyle(TableStyle(seg_ts))
+            story.append(st_tbl)
+            story.append(Spacer(1, 10))
+
         # Valor da causa
         story.append(Paragraph("VALOR DA CAUSA", sec_s))
-        mult_txt = "× 2 — Repetição em dobro (CDC art. 42, §único)" if res["dobro"] else "× 1 (simples)"
-        vc_rows = [[Paragraph(f"<b>{mult_txt}</b>", body_s),
-                    Paragraph(f"<b>{fmt_brl(res['excesso_corrigido'])} × {'2' if res['dobro'] else '1'}</b>",
-                               ParagraphStyle("vc", fontName="Helvetica-Bold", fontSize=9, alignment=TA_RIGHT))]]
+        fator_txt = "× 2" if res["dobro"] else "× 1"
+        mult_label = "Repetição em dobro (CDC art. 42, §único)" if res["dobro"] else "Simples"
+        vc_rows = [
+            [Paragraph(f"<b>Excesso de juros corrigido {fator_txt} ({mult_label}):</b>", body_s),
+             Paragraph(f"<b>{fmt_brl(res['excesso_corrigido'] * (2 if res['dobro'] else 1))}</b>",
+                        ParagraphStyle("vc", fontName="Helvetica-Bold", fontSize=9, alignment=TA_RIGHT))],
+        ]
+        if seguros_pdf:
+            vc_rows.append([
+                Paragraph(f"( + ) Seguros indevidos corrigidos {fator_txt}:", body_s),
+                Paragraph(fmt_brl(res.get("seguros_total_corr", 0) * (2 if res["dobro"] else 1)),
+                           ParagraphStyle("vs", fontName="Helvetica", fontSize=9, alignment=TA_RIGHT)),
+            ])
         if res.get("dano_moral", 0) > 0:
             vc_rows.append([Paragraph("( + ) Dano Moral:", body_s),
                             Paragraph(fmt_brl(res["dano_moral"]),
@@ -2413,6 +2462,52 @@ if IS_REVISIONAL:
     dano_moral_r = s2c4.number_input("⚖️ Dano Moral (R$, opcional)", min_value=0.0, value=0.0,
                                       step=500.0, format="%.2f")
 
+    st.markdown("---")
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SEÇÃO 3 — SEGUROS INDEVIDOS
+    # ═══════════════════════════════════════════════════════════════════════════
+    st.markdown('<div class="section-header"><b>🛡️ 3. Seguros Indevidos (opcional)</b></div>', unsafe_allow_html=True)
+    st.caption("Informe cada seguro cobrado indevidamente. Cada valor será corrigido com INPC/IPCAe + 1% mora a.m. desde a data da cobrança.")
+
+    if "rev_seguros" not in st.session_state:
+        st.session_state["rev_seguros"] = []
+
+    _seg_ids = st.session_state["rev_seguros"]
+
+    if _seg_ids:
+        _sh1, _sh2, _sh3, _sh4 = st.columns([2.8, 1.8, 1.8, 0.5])
+        _sh1.markdown("<span style='font-size:11px;font-weight:700;color:#7986cb;'>Descrição do Seguro</span>", unsafe_allow_html=True)
+        _sh2.markdown("<span style='font-size:11px;font-weight:700;color:#7986cb;'>Data da Cobrança</span>", unsafe_allow_html=True)
+        _sh3.markdown("<span style='font-size:11px;font-weight:700;color:#7986cb;'>Valor (R$)</span>", unsafe_allow_html=True)
+        st.markdown("<hr style='margin:2px 0 4px 0;border-color:#2d3748;'>", unsafe_allow_html=True)
+
+    for _sid in list(_seg_ids):
+        _sc1, _sc2, _sc3, _sc4 = st.columns([2.8, 1.8, 1.8, 0.5])
+        _sc1.text_input("Descrição", key=f"seg_desc_{_sid}", placeholder="Ex: Seguro prestamista",
+                         label_visibility="collapsed")
+        _sc2.text_input("Data", key=f"seg_data_{_sid}", placeholder="DD/MM/AAAA",
+                         label_visibility="collapsed")
+        _sc3.text_input("Valor (R$)", key=f"seg_val_{_sid}", placeholder="Ex: 1.200,00",
+                         label_visibility="collapsed")
+        with _sc4:
+            if st.button("🗑️", key=f"del_seg_{_sid}", help="Remover"):
+                st.session_state["rev_seguros"].remove(_sid)
+                st.rerun()
+
+    if st.button("➕ Adicionar seguro", key="add_seg"):
+        import uuid as _uuid
+        st.session_state["rev_seguros"].append(str(_uuid.uuid4())[:8])
+        st.rerun()
+
+    if _seg_ids:
+        st.caption(f"{len(_seg_ids)} seguro(s) cadastrado(s) — serão corrigidos individualmente a partir da data de cada cobrança.")
+
+    st.markdown("---")
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # BOTÃO CALCULAR
+    # ═══════════════════════════════════════════════════════════════════════════
     if st.button("🔢 Calcular Excesso e Valor da Causa", type="primary", use_container_width=True, key="btn_excesso"):
         erros2 = []
 
@@ -2449,8 +2544,8 @@ if IS_REVISIONAL:
             pmt_ref2  = _pmt(rev_valor, taxa_ref2, rev_parcelas)
             diff_parc = pmt_c2 - pmt_ref2
 
-            total_c2  = 0.0; total_ref2 = 0.0
-            exc_bruto = 0.0; exc_corrig = 0.0
+            # Juros em excesso
+            total_c2 = 0.0; total_ref2 = 0.0; exc_bruto = 0.0; exc_corrig = 0.0
             for k in range(1, rev_parcelas + 1):
                 mes_v = rev_data2.month + k
                 ano_v = rev_data2.year + (mes_v - 1) // 12
@@ -2460,7 +2555,7 @@ if IS_REVISIONAL:
                 except ValueError:
                     import calendar as _cal
                     dv_k = date(ano_v, mes_v, _cal.monthrange(ano_v, mes_v)[1])
-                total_c2  += pmt_c2
+                total_c2   += pmt_c2
                 total_ref2 += pmt_ref2
                 exc_bruto  += diff_parc
                 if diff_parc > 0:
@@ -2469,32 +2564,62 @@ if IS_REVISIONAL:
                     else:
                         exc_corrig += diff_parc
 
-            subtotal_exc = exc_corrig * 2 if rev_dobro else exc_corrig
-            valor_causa2 = subtotal_exc + dano_moral_r
+            # Seguros indevidos
+            seguros_calc = []
+            seg_total_orig = 0.0
+            seg_total_corr = 0.0
+            for _sid in st.session_state.get("rev_seguros", []):
+                _sdesc  = st.session_state.get(f"seg_desc_{_sid}", "").strip() or "Seguro"
+                _sdata  = st.session_state.get(f"seg_data_{_sid}", "").strip()
+                _sval   = st.session_state.get(f"seg_val_{_sid}", "").strip()
+                try:
+                    _sv = float(_sval.replace(".", "").replace(",", "."))
+                    assert _sv > 0
+                except Exception:
+                    continue
+                try:
+                    _sd = datetime.strptime(_sdata, "%d/%m/%Y").date()
+                except Exception:
+                    _sd = rev_data2  # fallback: usa data do contrato
+                _sv_corr = _corrigir_excesso(_sv, _sd, hoje_calc, indices)
+                seguros_calc.append({"desc": _sdesc, "data": _sdata or rev_data2.strftime("%d/%m/%Y"),
+                                     "valor_orig": _sv, "valor_corr": _sv_corr})
+                seg_total_orig += _sv
+                seg_total_corr += _sv_corr
+
+            fator = 2 if rev_dobro else 1
+            subtotal_juros_d = exc_corrig * fator
+            subtotal_seg_d   = seg_total_corr * fator
+            valor_causa2     = subtotal_juros_d + subtotal_seg_d + dano_moral_r
 
             st.session_state["rev_resultado"] = {
-                "nome_calc":       nome_calc,
-                "data_calc":       hoje_calc.strftime("%d/%m/%Y"),
-                "data_contrat":    rev_data2.strftime("%d/%m/%Y"),
-                "pv":              rev_valor,
-                "n":               rev_parcelas,
-                "pmt_c":           pmt_c2,
-                "taxa_c":          taxa_c2,
-                "taxa_ref":        taxa_ref2,
-                "pmt_ref":         pmt_ref2,
-                "diff_parcela":    diff_parc,
-                "total_c":         total_c2,
-                "total_ref":       total_ref2,
-                "excesso_bruto":   exc_bruto,
-                "excesso_corrigido": exc_corrig,
-                "dobro":           rev_dobro,
-                "dano_moral":      dano_moral_r,
-                "valor_causa":     valor_causa2,
+                "nome_calc":          nome_calc,
+                "data_calc":          hoje_calc.strftime("%d/%m/%Y"),
+                "data_contrat":       rev_data2.strftime("%d/%m/%Y"),
+                "pv":                 rev_valor,
+                "n":                  rev_parcelas,
+                "pmt_c":              pmt_c2,
+                "taxa_c":             taxa_c2,
+                "taxa_ref":           taxa_ref2,
+                "pmt_ref":            pmt_ref2,
+                "diff_parcela":       diff_parc,
+                "total_c":            total_c2,
+                "total_ref":          total_ref2,
+                "excesso_bruto":      exc_bruto,
+                "excesso_corrigido":  exc_corrig,
+                "dobro":              rev_dobro,
+                "dano_moral":         dano_moral_r,
+                "seguros":            seguros_calc,
+                "seguros_total_orig": seg_total_orig,
+                "seguros_total_corr": seg_total_corr,
+                "valor_causa":        valor_causa2,
             }
 
     if "rev_resultado" in st.session_state:
         res = st.session_state["rev_resultado"]
         tc  = res.get("taxa_c")
+        fator = 2 if res["dobro"] else 1
+        mult_txt = "× 2 (dobro CDC art. 42, §único)" if res["dobro"] else "× 1 (simples)"
 
         st.markdown('<div class="section-header"><b>📊 Resultado do Revisional</b></div>', unsafe_allow_html=True)
 
@@ -2505,6 +2630,8 @@ if IS_REVISIONAL:
             rc3.metric("Diferença de Taxa", f"{tc - res['taxa_ref']:.4f}% a.m.",
                        delta=f"{tc - res['taxa_ref']:+.4f}%", delta_color="inverse")
 
+        # ── Juros excessivos ─────────────────────────────────────────────────
+        st.markdown("**📌 Excesso de Juros**")
         st.markdown(f"""<div class="result-card"><table>
             <tr><td><b>Parcela contratada:</b></td>
                 <td style="text-align:right">{fmt_brl(res['pmt_c'])}/mês</td></tr>
@@ -2519,23 +2646,47 @@ if IS_REVISIONAL:
                 <td style="text-align:right">{fmt_brl(res['total_ref'])}</td></tr>
             <tr><td><b>Excesso bruto cobrado:</b></td>
                 <td style="text-align:right">{fmt_brl(res['excesso_bruto'])}</td></tr>
-            <tr><td><b>Excesso corrigido (INPC/IPCAe + 1% mora a.m.):</b></td>
+            <tr><td><b>Excesso corrigido (INPC/IPCAe + 1% mora):</b></td>
                 <td style="text-align:right"><b>{fmt_brl(res['excesso_corrigido'])}</b></td></tr>
         </table></div>""", unsafe_allow_html=True)
 
-        mult_txt = "× 2 (dobro CDC art. 42, §único)" if res["dobro"] else "× 1 (simples)"
+        # ── Seguros indevidos ────────────────────────────────────────────────
+        seguros_res = res.get("seguros", [])
+        if seguros_res:
+            st.markdown("**🛡️ Seguros Indevidos**")
+            seg_hdr_cols = st.columns([2.8, 1.5, 1.8, 1.8])
+            for _col, _lbl in zip(seg_hdr_cols, ["Descrição", "Data Cobrança", "Valor Original", "Valor Corrigido"]):
+                _col.markdown(f"<span style='font-size:11px;font-weight:700;color:#7986cb;'>{_lbl}</span>",
+                              unsafe_allow_html=True)
+            st.markdown("<hr style='margin:2px 0 4px 0;border-color:#2d3748;'>", unsafe_allow_html=True)
+            for sg in seguros_res:
+                _sc = st.columns([2.8, 1.5, 1.8, 1.8])
+                _sc[0].markdown(f"<span style='font-size:12px;'>{sg['desc']}</span>", unsafe_allow_html=True)
+                _sc[1].markdown(f"<span style='font-size:12px;'>{sg['data']}</span>", unsafe_allow_html=True)
+                _sc[2].markdown(f"<span style='font-size:12px;color:#9e9e9e;'>{fmt_brl(sg['valor_orig'])}</span>", unsafe_allow_html=True)
+                _sc[3].markdown(f"<span style='font-size:12px;font-weight:600;'>{fmt_brl(sg['valor_corr'])}</span>", unsafe_allow_html=True)
+                st.markdown("<hr style='margin:1px 0;border-color:#1e2533;'>", unsafe_allow_html=True)
+            _tot_cols = st.columns([2.8, 1.5, 1.8, 1.8])
+            _tot_cols[2].markdown(f"<span style='font-size:11px;color:#9e9e9e;font-weight:600;'>Total: {fmt_brl(res['seguros_total_orig'])}</span>", unsafe_allow_html=True)
+            _tot_cols[3].markdown(f"<span style='font-size:12px;color:#90caf9;font-weight:700;'>Total: {fmt_brl(res['seguros_total_corr'])}</span>", unsafe_allow_html=True)
+
+        # ── Total da causa ───────────────────────────────────────────────────
         dm_row = (f"<tr><td>( + ) Dano Moral:</td><td style='text-align:right'><b>{fmt_brl(res['dano_moral'])}</b></td></tr>"
                   if res.get("dano_moral", 0) > 0 else "")
+        seg_row = (f"<tr><td>( + ) Seguros indevidos corrigidos {mult_txt}:</td>"
+                   f"<td style='text-align:right'>{fmt_brl(res['seguros_total_corr'] * fator)}</td></tr>"
+                   if seguros_res else "")
         st.markdown(f"""<div class="total-card"><table>
-            <tr><td><b>Excesso corrigido {mult_txt}:</b></td>
-                <td style="text-align:right">{fmt_brl(res['excesso_corrigido'] * (2 if res['dobro'] else 1))}</td></tr>
+            <tr><td><b>Excesso de juros corrigido {mult_txt}:</b></td>
+                <td style="text-align:right">{fmt_brl(res['excesso_corrigido'] * fator)}</td></tr>
+            {seg_row}
             {dm_row}
             <tr><td><b>VALOR DA CAUSA:</b></td>
                 <td style="text-align:right;font-size:1.3em"><b>{fmt_brl(res['valor_causa'])}</b></td></tr>
         </table></div>""", unsafe_allow_html=True)
 
         st.caption(f"• Contratação: {res['data_contrat']} · Cálculo até: {res['data_calc']} · {res['n']} parcelas")
-        st.caption("• Correção: INPC (até ago/2024) → IPCAe (set/2024+) · Mora: 1% a.m. simples sobre cada parcela vencida")
+        st.caption("• Correção: INPC (até ago/2024) → IPCAe (set/2024+) · Mora: 1% a.m. simples sobre cada item vencido")
 
         # ── PDF ──────────────────────────────────────────────────────────────
         try:
