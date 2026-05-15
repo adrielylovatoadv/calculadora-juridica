@@ -1916,7 +1916,7 @@ with st.expander("📂 Clique para enviar um arquivo e extrair os lançamentos a
 # ──────────────────────────────────────────────────────────────
 # DATA DO CÁLCULO
 # ──────────────────────────────────────────────────────────────
-_dc_col, _ = st.columns([1, 3])
+_dc_col, _trib_col, _ = st.columns([1, 1, 2])
 with _dc_col:
     _dc_default = date.today().strftime("%d/%m/%Y")
     dc_str = st.text_input("📅 Data do Cálculo", value=_dc_default, placeholder="DD/MM/AAAA")
@@ -1927,12 +1927,15 @@ with _dc_col:
         if dc_str.strip():
             st.warning("⚠️ Data inválida. Use DD/MM/AAAA.")
     st.caption("Data-base para o cálculo")
+with _trib_col:
+    _trib_opcao = st.selectbox("⚖️ Índice / Tribunal", ["TJMG (CGJ/MG)", "TJSP (TJ/SP)"], index=0)
+    st.caption("Índice de correção aplicado")
 
 # Set empty defaults for removed fields (kept for export compatibility)
 numero_processo = ""
 exequente = ""
 executado = ""
-tribunal = "TJMG (CGJ/MG)"
+tribunal = _trib_opcao
 
 # ──────────────────────────────────────────────────────────────
 # LANÇAMENTOS DE COBRANÇA
