@@ -12,6 +12,7 @@ import requests
 from datetime import date, datetime
 import pandas as pd
 from io import BytesIO
+import streamlit.components.v1 as components
 
 # ──────────────────────────────────────────────────────────────
 # PAGE CONFIG (deve ser a primeira chamada Streamlit)
@@ -22,6 +23,48 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# ── PWA / iOS home-screen icon ────────────────────────────────────────────────
+components.html("""
+<script>
+(function(){
+  var d = window.parent.document;
+  if (d.querySelector('link[rel="apple-touch-icon"]')) return;
+  var cv = document.createElement('canvas');
+  cv.width = cv.height = 192;
+  var ctx = cv.getContext('2d');
+  ctx.fillStyle = '#4a1d96';
+  if (ctx.roundRect) { ctx.roundRect(0,0,192,192,38); } else { ctx.rect(0,0,192,192); }
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 108px Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('J', 96, 100);
+  var png = cv.toDataURL('image/png');
+  var lnk = d.createElement('link');
+  lnk.rel = 'apple-touch-icon'; lnk.sizes = '192x192'; lnk.href = png;
+  d.head.appendChild(lnk);
+  var metas = [
+    ['apple-mobile-web-app-capable','yes'],
+    ['apple-mobile-web-app-status-bar-style','black-translucent'],
+    ['apple-mobile-web-app-title','Jurídica'],
+    ['mobile-web-app-capable','yes']
+  ];
+  metas.forEach(function(m){
+    if (!d.querySelector('meta[name="'+m[0]+'"]')){
+      var el = d.createElement('meta'); el.name=m[0]; el.content=m[1]; d.head.appendChild(el);
+    }
+  });
+  var manifest = {name:'Calculadora Jurídica',short_name:'Jurídica',
+    display:'standalone',background_color:'#4a1d96',theme_color:'#4a1d96',
+    icons:[{src:png,sizes:'192x192',type:'image/png'}]};
+  var blob = new Blob([JSON.stringify(manifest)],{type:'application/json'});
+  var ml = d.createElement('link'); ml.rel='manifest'; ml.href=URL.createObjectURL(blob);
+  d.head.appendChild(ml);
+})();
+</script>
+""", height=0)
 
 # ── Login ─────────────────────────────────────────────────────
 _senha_correta = st.secrets.get("SENHA", "escritorio2024") if hasattr(st, "secrets") else "escritorio2024"
