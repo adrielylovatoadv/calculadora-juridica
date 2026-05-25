@@ -33,7 +33,7 @@ components.html("""
   var cv = document.createElement('canvas');
   cv.width = cv.height = 192;
   var ctx = cv.getContext('2d');
-  ctx.fillStyle = '#4a1d96';
+  ctx.fillStyle = '#6B1A2E';
   if (ctx.roundRect) { ctx.roundRect(0,0,192,192,38); } else { ctx.rect(0,0,192,192); }
   ctx.fill();
   ctx.fillStyle = '#ffffff';
@@ -57,7 +57,7 @@ components.html("""
     }
   });
   var manifest = {name:'Calculadora Jurídica',short_name:'Jurídica',
-    display:'standalone',background_color:'#4a1d96',theme_color:'#4a1d96',
+    display:'standalone',background_color:'#6B1A2E',theme_color:'#6B1A2E',
     icons:[{src:png,sizes:'192x192',type:'image/png'}]};
   var blob = new Blob([JSON.stringify(manifest)],{type:'application/json'});
   var ml = d.createElement('link'); ml.rel='manifest'; ml.href=URL.createObjectURL(blob);
@@ -71,10 +71,13 @@ _senha_correta = st.secrets.get("SENHA", "escritorio2024") if hasattr(st, "secre
 if "logado" not in st.session_state:
     st.session_state["logado"] = False
 if not st.session_state["logado"]:
-    st.markdown("""<div style="max-width:380px;margin:80px auto;background:white;border-radius:14px;
-        padding:36px;box-shadow:0 4px 24px rgba(0,0,0,0.12);text-align:center;">
-        <h2 style="color:#1a3a6b;margin-bottom:6px;">⚖️ Calculadora Jurídica</h2>
-        <p style="color:#718096;margin-bottom:24px;">Escritório de Advocacia</p>
+    st.markdown("""<div style="max-width:380px;margin:80px auto;background:linear-gradient(135deg,#1E0C12,#2A1019);
+        border:1px solid #5C1F30;border-radius:16px;
+        padding:36px;box-shadow:0 4px 32px rgba(107,26,46,0.4);text-align:center;">
+        <div style="font-size:11px;letter-spacing:3px;color:#C4973A;font-weight:600;margin-bottom:4px;">LOVATO &amp; ESTEVÃO</div>
+        <div style="font-size:10px;letter-spacing:2px;color:#C4A882;margin-bottom:20px;">ADVOCACIA</div>
+        <h2 style="color:#F5EDE0;margin-bottom:6px;font-size:18px;">⚖️ Calculadora Jurídica</h2>
+        <p style="color:#C4A882;margin-bottom:24px;font-size:13px;">Escritório de Advocacia</p>
     </div>""", unsafe_allow_html=True)
     with st.form("login_calc"):
         st.markdown("### 🔐 Acesso")
@@ -93,92 +96,38 @@ if not st.session_state["logado"]:
 st.markdown(
     """
 <style>
-    .main-header {
-        background: linear-gradient(135deg, #1a3a6b 0%, #2c5282 100%);
-        color: white;
-        padding: 22px 28px;
-        border-radius: 10px;
-        margin-bottom: 22px;
-        box-shadow: 0 4px 12px rgba(26,58,107,0.3);
-    }
-    .main-header h2 { margin: 0; color: white; font-size: 1.6em; }
-    .main-header p  { margin: 6px 0 0 0; color: #bee3f8; font-size: 0.95em; }
-
-    .section-header {
-        background-color: #2c5282;
-        color: white;
-        padding: 8px 16px;
-        border-radius: 6px;
-        margin: 18px 0 10px 0;
-        font-size: 1em;
-    }
-
-    .result-card {
-        background-color: #ebf4ff;
-        border: 1px solid #3182ce;
-        border-radius: 8px;
-        padding: 14px 18px;
-        margin: 8px 0;
-        font-size: 0.97em;
-        color: #1a202c !important;
-    }
-    .result-card table { width: 100%; border-collapse: collapse; color: #1a202c; }
-    .result-card tr td { padding: 3px 0; color: #1a202c; }
-
-    .total-card {
-        background: linear-gradient(135deg, #1a3a6b 0%, #2c5282 100%);
-        color: white;
-        border-radius: 8px;
-        padding: 14px 18px;
-        margin: 8px 0;
-        font-size: 1.15em;
-        font-weight: bold;
-        box-shadow: 0 3px 10px rgba(26,58,107,0.4);
-    }
-    .total-card table { width: 100%; border-collapse: collapse; }
-
-    .charge-row {
-        background-color: #f7fafc;
-        border: 1px solid #e2e8f0;
-        border-radius: 6px;
-        padding: 8px;
-        margin: 4px 0;
-    }
-
-    .stButton > button {
-        background-color: #2c5282;
-        color: white;
-        border: none;
-        border-radius: 6px;
-        font-weight: 500;
-    }
-    .stButton > button:hover {
-        background-color: #1a3a6b;
-        color: white;
-    }
-    .footer-bar {
-        text-align: center;
-        color: #718096;
-        font-size: 0.82em;
-        margin-top: 30px;
-        padding-top: 15px;
-        border-top: 1px solid #e2e8f0;
-    }
-    .col-header {
-        font-weight: bold;
-        font-size: 0.88em;
-        color: #2c5282;
-        text-align: center;
-        padding: 4px 0;
-        border-bottom: 2px solid #2c5282;
-        margin-bottom: 6px;
-    }
-    .calc-value {
-        font-family: monospace;
-        font-size: 0.92em;
-        text-align: right;
-        padding: 2px 4px;
-    }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+html,body,[class*="css"]{font-family:'Inter',sans-serif;}
+.main,.stApp{background:#0F0509;color:#F5EDE0;}
+section[data-testid="stSidebar"]{background:#180A0D;}
+.main-header{background:linear-gradient(135deg,#6B1A2E 0%,#8B2A42 100%);
+    color:#F5EDE0;padding:22px 28px;border-radius:12px;margin-bottom:22px;
+    box-shadow:0 4px 16px rgba(107,26,46,0.4);}
+.main-header h2{margin:0;color:#F5EDE0;font-size:1.6em;}
+.main-header p{margin:6px 0 0 0;color:#C4A882;font-size:0.95em;}
+.section-header{background:linear-gradient(135deg,#6B1A2E,#8B2A42);color:#F5EDE0;
+    padding:8px 16px;border-radius:8px;margin:18px 0 10px 0;font-size:1em;}
+.result-card{background:#1E0C12;border:1px solid #5C1F30;border-radius:8px;
+    padding:14px 18px;margin:8px 0;font-size:0.97em;color:#F5EDE0!important;}
+.result-card table{width:100%;border-collapse:collapse;color:#F5EDE0;}
+.result-card tr td{padding:3px 0;color:#F5EDE0;}
+.total-card{background:linear-gradient(135deg,#6B1A2E 0%,#8B2A42 100%);color:#F5EDE0;
+    border-radius:8px;padding:14px 18px;margin:8px 0;font-size:1.15em;font-weight:bold;
+    box-shadow:0 3px 10px rgba(107,26,46,0.4);}
+.total-card table{width:100%;border-collapse:collapse;}
+.charge-row{background:#2A1019;border:1px solid #5C1F30;border-radius:6px;padding:8px;margin:4px 0;}
+.stButton>button{background:linear-gradient(135deg,#6B1A2E,#C4973A);color:white;
+    border:none;border-radius:8px;font-weight:600;}
+.stButton>button:hover{background:linear-gradient(135deg,#8B2A42,#D4AF6A);color:white;}
+.stTextInput>div>div>input,.stSelectbox>div>div>div{
+    background:#2A1019!important;border:1px solid #5C1F30!important;
+    color:#F5EDE0!important;border-radius:8px!important;}
+h1,h2,h3{color:#F5EDE0;}
+.footer-bar{text-align:center;color:#C4A882;font-size:0.82em;margin-top:30px;
+    padding-top:15px;border-top:1px solid #5C1F30;}
+.col-header{font-weight:bold;font-size:0.88em;color:#C4973A;text-align:center;
+    padding:4px 0;border-bottom:2px solid #C4973A;margin-bottom:6px;}
+.calc-value{font-family:monospace;font-size:0.92em;text-align:right;padding:2px 4px;}
 </style>
 """,
     unsafe_allow_html=True,
@@ -1645,15 +1594,19 @@ with st.sidebar:
 # ──────────────────────────────────────────────────────────────
 # CABEÇALHO PRINCIPAL
 # ──────────────────────────────────────────────────────────────
-st.markdown(
-    """
-<div class="main-header">
-  <h2>⚖️ CALCULADORA DE EXECUÇÃO JUDICIAL</h2>
-  <p>Direito do Consumidor — Cobranças Indevidas e Fraudes Bancárias | TJMG / TJSP</p>
-</div>
-""",
-    unsafe_allow_html=True,
-)
+import base64 as _b64_calc
+import os as _os_calc
+with open(_os_calc.path.join(_os_calc.path.dirname(__file__), "logo.png"), "rb") as _lf:
+    _logo_b64_calc = _b64_calc.b64encode(_lf.read()).decode()
+st.markdown(f"""<div class="main-header" style="display:flex;align-items:center;gap:20px;">
+  <img src='data:image/png;base64,{_logo_b64_calc}' style='width:72px;border-radius:10px;
+       box-shadow:0 2px 12px rgba(0,0,0,0.4);flex-shrink:0;'>
+  <div>
+    <div style='font-size:9px;letter-spacing:3px;color:#C4973A;font-weight:700;'>LOVATO &amp; ESTEVÃO · ADVOCACIA</div>
+    <h2 style='margin:4px 0 0 0;'>⚖️ Calculadora Jurídica</h2>
+    <p>Direito do Consumidor · Cobranças Indevidas · Fraudes Bancárias</p>
+  </div>
+</div>""", unsafe_allow_html=True)
 
 indices: dict = st.session_state.indices
 has_indices = bool(indices.get("inpc"))
