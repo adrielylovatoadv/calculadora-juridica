@@ -1958,7 +1958,7 @@ if IS_HONORARIO:
                 ]
                 doc_rl.build(story)
                 st.download_button("🖨️ Baixar PDF", data=buf_pdf.getvalue(),
-                    file_name=f"honorario_{h_processo or 'calculo'}.pdf",
+                    file_name=f"calculo_honorario_{(h_processo or 'processo').replace('/','_').replace('.','_').replace(' ','_')}_{h_data_calc.strftime('%Y%m%d')}.pdf",
                     mime="application/pdf", type="primary")
             except Exception as e:
                 st.warning(f"Erro ao gerar PDF: {e}")
