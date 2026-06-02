@@ -1668,17 +1668,20 @@ with modo_col1:
     modo_calculo = st.radio(
         "**Modalidade do Cálculo**",
         ["📋  Petição Inicial", "⚖️  Cumprimento de Sentença / Execução",
+         "🏛️  Execução de Honorário",
          "🚗  Revisional de Veículo", "💳  Empréstimo Não Consignado"],
         horizontal=True,
         help=(
             "**Petição Inicial**: valor da causa para petição inicial.\n\n"
             "**Execução**: demonstrativo para cumprimento de sentença.\n\n"
+            "**Execução de Honorário**: corrige o valor da causa (sem juros) e calcula o honorário devido.\n\n"
             "**Revisional de Veículo**: calcula diferença entre taxa contratada e taxa média do mercado.\n\n"
             "**Empréstimo Não Consignado**: revisional de crédito pessoal não consignado."
         ),
     )
 IS_INICIAL        = "Inicial"    in modo_calculo
-IS_EXECUCAO       = "Execução"   in modo_calculo
+IS_EXECUCAO       = "Execução"   in modo_calculo and "Honorário" not in modo_calculo
+IS_HONORARIO      = "Honorário"  in modo_calculo
 IS_REVISIONAL_VEI = "Veículo"    in modo_calculo
 IS_REVISIONAL_EMP = "Consignado" in modo_calculo
 IS_REVISIONAL     = IS_REVISIONAL_VEI or IS_REVISIONAL_EMP
@@ -3072,6 +3075,142 @@ with exp_col4:
         })
         st.success("✅ Salvo no histórico!")
         st.rerun()
+
+# ══════════════════════════════════════════════════════════════
+# EXECUÇÃO DE HONORÁRIO
+# ══════════════════════════════════════════════════════════════
+if IS_HONORARIO:
+    st.markdown("## 🏛️ Execução de Honorário")
+    st.info(
+        "Corrige o **valor da causa** pela inflação (INPC/IPCAe) **sem juros de mora** "
+        "e calcula o percentual de honorário devido sobre o valor corrigido."
+    )
+
+    with st.form("form_honorario"):
+        hc1, hc2 = st.columns(2)
+        with hc1:
+            h_valor = st.number_input(
+                "💰 Valor da Causa (R$)", min_value=0.01, value=1000.0, step=100.0,
+                help="Valor original da causa a ser corrigido."
+            )
+            h_data_orig = st.date_input(
+                "📅 Data de Origem", value=date(2020, 1, 1),
+                help="Data em que o valor foi fixado (início da correção)."
+            )
+            h_data_calc = st.date_input(
+                "📅 Data do Cálculo", value=date.today(),
+                help="Data-base do cálculo (hoje ou data da petição)."
+            )
+        with hc2:
+            h_pct = st.number_input(
+                "⚖️ Percentual de Honorário (%)", min_value=0.0, max_value=100.0,
+                value=20.0, step=0.5,
+                help="Percentual de honorário a aplicar sobre o valor corrigido."
+            )
+            h_processo = st.text_input("📋 Número do Processo", placeholder="0000000-00.0000.0.00.0000")
+            h_cliente  = st.text_input("👤 Cliente / Parte")
+            h_reu      = st.text_input("🏦 Réu / Executado")
+
+        h_calcular = st.form_submit_button("🧮 Calcular", type="primary", use_container_width=True)
+
+    if h_calcular:
+        if not has_indices:
+            st.error("⚠️ Atualize os índices antes de calcular.")
+        elif h_data_orig >= h_data_calc:
+            st.error("A data de origem deve ser anterior à data do cálculo.")
+        else:
+            # Correção monetária pura — sem juros
+            corr_factor = 1.0
+            meses_corr  = 0
+            indice_usado = []
+            for year, month in iter_months(h_data_orig, h_data_calc):
+                idx = get_correction_index(year, month, indices)
+                corr_factor *= 1.0 + idx / 100.0
+                meses_corr  += 1
+                label = "INPC" if (year < 2024 or (year == 2024 and month <= 8)) else "IPCAe"
+                indice_usado.append(label)
+
+            valor_corrigido = round(h_valor * corr_factor, 2)
+            variacao_pct    = round((corr_factor - 1.0) * 100, 4)
+            honorario_valor = round(valor_corrigido * h_pct / 100.0, 2)
+            indice_label    = "INPC" if all(i == "INPC" for i in indice_usado) else \
+                              "IPCAe" if all(i == "IPCAe" for i in indice_usado) else "INPC/IPCAe"
+
+            st.success("✅ Cálculo realizado com sucesso!")
+
+            # ── Resumo ────────────────────────────────────────────────
+            st.markdown("---")
+            if h_processo:
+                st.markdown(f"**Processo:** `{h_processo}`")
+            if h_cliente:
+                st.markdown(f"**Cliente:** {h_cliente}  |  **Réu:** {h_reu}")
+
+            rc1, rc2, rc3 = st.columns(3)
+            rc1.metric("Valor Original", fmt_brl(h_valor))
+            rc2.metric(f"Valor Corrigido ({indice_label})", fmt_brl(valor_corrigido),
+                       delta=f"+{variacao_pct:.2f}%")
+            rc3.metric(f"Honorário ({h_pct}%)", fmt_brl(honorario_valor))
+
+            st.markdown("---")
+
+            # ── Tabela de detalhamento ────────────────────────────────
+            rows_hon = [
+                ("Valor da Causa (original)",            fmt_brl(h_valor)),
+                (f"Fator de correção ({indice_label})",  f"{corr_factor:.6f}  (+{variacao_pct:.4f}%)"),
+                (f"Período de correção",                  f"{meses_corr} mes(es)  "
+                                                          f"({h_data_orig.strftime('%d/%m/%Y')} → "
+                                                          f"{h_data_calc.strftime('%d/%m/%Y')})"),
+                ("( = ) Valor Corrigido",                fmt_brl(valor_corrigido)),
+                (f"( × ) Percentual de Honorário",        f"{h_pct:.2f}%"),
+                (f"( = ) Honorário Devido",               fmt_brl(honorario_valor)),
+            ]
+            for label, val in rows_hon:
+                cc1, cc2 = st.columns([2, 1])
+                cc1.markdown(f"<span style='font-size:13px;'>{label}</span>", unsafe_allow_html=True)
+                bold = "font-weight:700;" if "Honorário Devido" in label or "Valor Corrigido" in label else ""
+                color = "color:#4caf50;" if "Honorário Devido" in label else ""
+                cc2.markdown(f"<span style='font-size:13px;{bold}{color}'>{val}</span>", unsafe_allow_html=True)
+
+            st.markdown("---")
+            st.caption(
+                f"Correção monetária: {indice_label} (IBGE/BCB) — sem juros de mora.\n"
+                f"Honorário calculado sobre o valor corrigido na data de {h_data_calc.strftime('%d/%m/%Y')}."
+            )
+
+            # ── Exportar Word ─────────────────────────────────────────
+            try:
+                from docx import Document as DocxDoc
+                from docx.shared import Pt
+                from io import BytesIO as BIO
+                doc = DocxDoc()
+                doc.add_heading("Execução de Honorário", 0)
+                if h_processo:
+                    doc.add_paragraph(f"Processo: {h_processo}")
+                if h_cliente:
+                    doc.add_paragraph(f"Cliente: {h_cliente}  |  Réu: {h_reu}")
+                doc.add_paragraph("")
+                tbl = doc.add_table(rows=1, cols=2)
+                tbl.style = "Light Grid Accent 1"
+                tbl.rows[0].cells[0].text = "Descrição"
+                tbl.rows[0].cells[1].text = "Valor"
+                for label, val in rows_hon:
+                    row = tbl.add_row()
+                    row.cells[0].text = label
+                    row.cells[1].text = val
+                doc.add_paragraph("")
+                doc.add_paragraph(
+                    f"Correção monetária: {indice_label} — sem juros de mora. "
+                    f"Data do cálculo: {h_data_calc.strftime('%d/%m/%Y')}."
+                )
+                buf_hon = BIO()
+                doc.save(buf_hon)
+                st.download_button(
+                    "📄 Exportar Word", buf_hon.getvalue(),
+                    file_name=f"honorario_{h_processo or 'calculo'}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
+            except Exception:
+                pass
 
 # ──────────────────────────────────────────────────────────────
 # RODAPÉ
