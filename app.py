@@ -1808,21 +1808,28 @@ if IS_HONORARIO:
         with hc1:
             h_valor = st.number_input(
                 "💰 Valor da Causa (R$)", min_value=0.01, value=1000.0, step=100.0)
-            h_data_orig = st.date_input("📅 Data de Origem", value=date(2020, 1, 1))
-            h_data_calc = st.date_input("📅 Data do Cálculo", value=date.today())
-            h_tribunal  = st.selectbox("⚖️ Tribunal",
-                                       ["TJMG (INPC/IPCAe)", "TJSP (Tabela Prática)"])
+            h_data_orig_str = st.text_input("📅 Data de Origem", value="01/01/2020",
+                                            placeholder="DD/MM/AAAA")
+            h_data_calc_str = st.text_input("📅 Data do Cálculo",
+                                            value=date.today().strftime("%d/%m/%Y"),
+                                            placeholder="DD/MM/AAAA")
+            h_tribunal = st.selectbox("⚖️ Tribunal",
+                                      ["TJMG (INPC/IPCAe)", "TJSP (Tabela Prática)"])
         with hc2:
             h_pct      = st.number_input("⚖️ Percentual de Honorário (%)",
                                          min_value=0.0, max_value=100.0, value=20.0, step=0.5)
             h_processo = st.text_input("📋 Número do Processo",
                                        placeholder="0000000-00.0000.0.00.0000")
-            h_cliente  = st.text_input("👤 Cliente / Parte")
-            h_reu      = st.text_input("🏦 Réu / Executado")
 
         h_calcular = st.form_submit_button("🧮 Calcular", type="primary", use_container_width=True)
 
     if h_calcular:
+        try:
+            h_data_orig = datetime.strptime(h_data_orig_str.strip(), "%d/%m/%Y").date()
+            h_data_calc = datetime.strptime(h_data_calc_str.strip(), "%d/%m/%Y").date()
+        except ValueError:
+            st.error("Data inválida. Use o formato DD/MM/AAAA.")
+            st.stop()
         if not has_indices:
             st.error("⚠️ Atualize os índices antes de calcular.")
         elif h_data_orig >= h_data_calc:
@@ -1849,8 +1856,6 @@ if IS_HONORARIO:
             st.markdown("---")
             if h_processo:
                 st.markdown(f"**Processo:** `{h_processo}`")
-            if h_cliente:
-                st.markdown(f"**Cliente:** {h_cliente}  |  **Réu:** {h_reu}")
 
             rows_hon = [
                 ("Valor da Causa (original)",          fmt_brl(h_valor)),
@@ -1913,9 +1918,6 @@ if IS_HONORARIO:
                 ]
                 if h_processo:
                     story.append(Paragraph(f"<b>Processo:</b> {h_processo}", styles["Normal"]))
-                if h_cliente:
-                    story.append(Paragraph(f"<b>Cliente:</b> {h_cliente}  |  <b>Réu:</b> {h_reu}",
-                                           styles["Normal"]))
                 story.append(Spacer(1, 12))
 
                 tbl_data = [["Descrição", "Valor"]] + [[l, v] for l, v in rows_hon]
@@ -1939,11 +1941,21 @@ if IS_HONORARIO:
                         ts.add("BACKGROUND",(0,i),(-1,i),colors.HexColor("#e3f2fd"))
                         ts.add("FONTNAME",  (0,i),(-1,i),"Helvetica-Bold")
                 tbl_rl.setStyle(ts)
-                story += [tbl_rl, Paragraph(
-                    f"Correção: {indice_label} — sem juros de mora. "
-                    f"Data-base: {h_data_calc.strftime('%d/%m/%Y')}.",
-                    ParagraphStyle("n", parent=styles["Normal"], fontSize=8,
-                                   textColor=colors.grey, spaceBefore=10))]
+
+                sig_s = ParagraphStyle("sig", parent=styles["Normal"], fontSize=9,
+                                       alignment=1, spaceBefore=30)
+                story += [
+                    tbl_rl,
+                    Paragraph(
+                        f"Correção: {indice_label} — sem juros de mora. "
+                        f"Data-base: {h_data_calc.strftime('%d/%m/%Y')}.",
+                        ParagraphStyle("n", parent=styles["Normal"], fontSize=8,
+                                       textColor=colors.grey, spaceBefore=10)),
+                    Spacer(1, 40),
+                    Paragraph("_" * 55, sig_s),
+                    Paragraph("<b>ADRIELY NAVES LOVATO</b>", sig_s),
+                    Paragraph("OAB/SP 492.370 – OAB/MG 244.799", sig_s),
+                ]
                 doc_rl.build(story)
                 st.download_button("🖨️ Baixar PDF", data=buf_pdf.getvalue(),
                     file_name=f"honorario_{h_processo or 'calculo'}.pdf",
