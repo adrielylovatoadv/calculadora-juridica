@@ -1798,6 +1798,162 @@ if not has_indices:
     )
 
 # ──────────────────────────────────────────────────────────────
+# EXECUÇÃO DE HONORÁRIO — renderiza aqui e para o script
+# ──────────────────────────────────────────────────────────────
+if IS_HONORARIO:
+    st.markdown("## 🏛️ Execução de Honorário")
+
+    with st.form("form_honorario"):
+        hc1, hc2 = st.columns(2)
+        with hc1:
+            h_valor = st.number_input(
+                "💰 Valor da Causa (R$)", min_value=0.01, value=1000.0, step=100.0)
+            h_data_orig = st.date_input("📅 Data de Origem", value=date(2020, 1, 1))
+            h_data_calc = st.date_input("📅 Data do Cálculo", value=date.today())
+            h_tribunal  = st.selectbox("⚖️ Tribunal",
+                                       ["TJMG (INPC/IPCAe)", "TJSP (Tabela Prática)"])
+        with hc2:
+            h_pct      = st.number_input("⚖️ Percentual de Honorário (%)",
+                                         min_value=0.0, max_value=100.0, value=20.0, step=0.5)
+            h_processo = st.text_input("📋 Número do Processo",
+                                       placeholder="0000000-00.0000.0.00.0000")
+            h_cliente  = st.text_input("👤 Cliente / Parte")
+            h_reu      = st.text_input("🏦 Réu / Executado")
+
+        h_calcular = st.form_submit_button("🧮 Calcular", type="primary", use_container_width=True)
+
+    if h_calcular:
+        if not has_indices:
+            st.error("⚠️ Atualize os índices antes de calcular.")
+        elif h_data_orig >= h_data_calc:
+            st.error("A data de origem deve ser anterior à data do cálculo.")
+        else:
+            is_tjsp_hon = "TJSP" in h_tribunal
+            if is_tjsp_hon:
+                valor_corrigido, corr_factor, meses_corr = calc_correcao_tjsp(
+                    h_valor, h_data_orig, h_data_calc, indices)
+                indice_label = "Tabela Prática TJSP"
+            else:
+                corr_factor = 1.0; meses_corr = 0; indice_usado = []
+                for year, month in iter_months(h_data_orig, h_data_calc):
+                    corr_factor *= 1.0 + get_correction_index(year, month, indices) / 100.0
+                    meses_corr  += 1
+                    indice_usado.append("INPC" if (year < 2024 or (year == 2024 and month <= 8)) else "IPCAe")
+                valor_corrigido = round(h_valor * corr_factor, 2)
+                indice_label = "INPC" if all(i == "INPC" for i in indice_usado) else \
+                               "IPCAe" if all(i == "IPCAe" for i in indice_usado) else "INPC/IPCAe"
+
+            variacao_pct    = round((corr_factor - 1.0) * 100, 4)
+            honorario_valor = round(valor_corrigido * h_pct / 100.0, 2)
+
+            st.markdown("---")
+            if h_processo:
+                st.markdown(f"**Processo:** `{h_processo}`")
+            if h_cliente:
+                st.markdown(f"**Cliente:** {h_cliente}  |  **Réu:** {h_reu}")
+
+            rows_hon = [
+                ("Valor da Causa (original)",          fmt_brl(h_valor)),
+                ("Índice de correção",                  indice_label),
+                ("Período",                             f"{meses_corr} mês(es) — "
+                                                        f"{h_data_orig.strftime('%d/%m/%Y')} a "
+                                                        f"{h_data_calc.strftime('%d/%m/%Y')}"),
+                ("Fator acumulado",                     f"{corr_factor:.6f} (+{variacao_pct:.4f}%)"),
+                ("( = ) Valor Corrigido",               fmt_brl(valor_corrigido)),
+                ("( × ) Percentual de Honorário",       f"{h_pct:.2f}%"),
+                ("( = ) Honorário Devido",              fmt_brl(honorario_valor)),
+            ]
+
+            linhas_html = ""
+            for lbl, val in rows_hon:
+                is_hon  = "Honorário Devido" in lbl
+                is_corr = "Valor Corrigido"  in lbl
+                peso = "font-weight:700;" if (is_hon or is_corr) else ""
+                cor  = "color:#4caf50;"  if is_hon  else "color:#90caf9;" if is_corr else ""
+                bg   = "background:rgba(76,175,80,.1);" if is_hon else \
+                       "background:rgba(144,202,249,.08);" if is_corr else ""
+                linhas_html += (
+                    f"<tr style='{bg}'>"
+                    f"<td style='padding:7px 12px;font-size:13px;'>{lbl}</td>"
+                    f"<td style='padding:7px 12px;font-size:13px;{peso}{cor}text-align:right;'>{val}</td>"
+                    f"</tr>"
+                )
+            st.markdown(
+                f"""<table style='width:100%;border-collapse:collapse;
+                    border:1px solid #2d3748;border-radius:8px;overflow:hidden;margin-top:8px;'>
+                  <thead><tr style='background:#1e2533;'>
+                    <th style='padding:8px 12px;text-align:left;font-size:12px;color:#7986cb;'>Descrição</th>
+                    <th style='padding:8px 12px;text-align:right;font-size:12px;color:#7986cb;'>Valor</th>
+                  </tr></thead><tbody>{linhas_html}</tbody></table>""",
+                unsafe_allow_html=True)
+            st.markdown("")
+            st.caption(f"Correção: {indice_label} — sem juros de mora. "
+                       f"Data-base: {h_data_calc.strftime('%d/%m/%Y')}.")
+
+            # PDF
+            try:
+                from io import BytesIO as BIO
+                from reportlab.lib.pagesizes import A4
+                from reportlab.lib import colors
+                from reportlab.lib.units import cm
+                from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+                from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+
+                buf_pdf = BIO()
+                doc_rl  = SimpleDocTemplate(buf_pdf, pagesize=A4,
+                                            leftMargin=2*cm, rightMargin=2*cm,
+                                            topMargin=2*cm, bottomMargin=2*cm)
+                styles  = getSampleStyleSheet()
+                story   = [
+                    Paragraph("Execução de Honorário",
+                              ParagraphStyle("t", parent=styles["Title"], fontSize=14, spaceAfter=4)),
+                    Paragraph(f"Data do cálculo: {h_data_calc.strftime('%d/%m/%Y')}",
+                              ParagraphStyle("s", parent=styles["Normal"], fontSize=9,
+                                             textColor=colors.grey, spaceAfter=10)),
+                ]
+                if h_processo:
+                    story.append(Paragraph(f"<b>Processo:</b> {h_processo}", styles["Normal"]))
+                if h_cliente:
+                    story.append(Paragraph(f"<b>Cliente:</b> {h_cliente}  |  <b>Réu:</b> {h_reu}",
+                                           styles["Normal"]))
+                story.append(Spacer(1, 12))
+
+                tbl_data = [["Descrição", "Valor"]] + [[l, v] for l, v in rows_hon]
+                tbl_rl   = Table(tbl_data, colWidths=[12*cm, 5*cm])
+                ts = TableStyle([
+                    ("BACKGROUND",   (0,0),(-1,0),  colors.HexColor("#1e2533")),
+                    ("TEXTCOLOR",    (0,0),(-1,0),  colors.white),
+                    ("FONTNAME",     (0,0),(-1,0),  "Helvetica-Bold"),
+                    ("FONTSIZE",     (0,0),(-1,-1), 9),
+                    ("ALIGN",        (1,0),(1,-1),  "RIGHT"),
+                    ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.HexColor("#f5f5f5"), colors.white]),
+                    ("GRID",         (0,0),(-1,-1), 0.4, colors.lightgrey),
+                    ("TOPPADDING",   (0,0),(-1,-1), 5),
+                    ("BOTTOMPADDING",(0,0),(-1,-1), 5),
+                ])
+                for i, (lbl, _) in enumerate(rows_hon, 1):
+                    if "Honorário Devido" in lbl:
+                        ts.add("BACKGROUND",(0,i),(-1,i),colors.HexColor("#dcedc8"))
+                        ts.add("FONTNAME",  (0,i),(-1,i),"Helvetica-Bold")
+                    elif "Valor Corrigido" in lbl:
+                        ts.add("BACKGROUND",(0,i),(-1,i),colors.HexColor("#e3f2fd"))
+                        ts.add("FONTNAME",  (0,i),(-1,i),"Helvetica-Bold")
+                tbl_rl.setStyle(ts)
+                story += [tbl_rl, Paragraph(
+                    f"Correção: {indice_label} — sem juros de mora. "
+                    f"Data-base: {h_data_calc.strftime('%d/%m/%Y')}.",
+                    ParagraphStyle("n", parent=styles["Normal"], fontSize=8,
+                                   textColor=colors.grey, spaceBefore=10))]
+                doc_rl.build(story)
+                st.download_button("🖨️ Baixar PDF", data=buf_pdf.getvalue(),
+                    file_name=f"honorario_{h_processo or 'calculo'}.pdf",
+                    mime="application/pdf", type="primary")
+            except Exception as e:
+                st.warning(f"Erro ao gerar PDF: {e}")
+
+    st.stop()   # não renderiza nada abaixo quando IS_HONORARIO
+
+# ──────────────────────────────────────────────────────────────
 # UPLOAD DE DOCUMENTOS
 # ──────────────────────────────────────────────────────────────
 st.markdown(
@@ -3181,180 +3337,7 @@ with exp_col4:
         st.success("✅ Salvo no histórico!")
         st.rerun()
 
-# ══════════════════════════════════════════════════════════════
-# EXECUÇÃO DE HONORÁRIO
-# ══════════════════════════════════════════════════════════════
-if IS_HONORARIO:
-    st.markdown("## 🏛️ Execução de Honorário")
-
-    with st.form("form_honorario"):
-        hc1, hc2 = st.columns(2)
-        with hc1:
-            h_valor = st.number_input(
-                "💰 Valor da Causa (R$)", min_value=0.01, value=1000.0, step=100.0)
-            h_data_orig = st.date_input("📅 Data de Origem", value=date(2020, 1, 1))
-            h_data_calc = st.date_input("📅 Data do Cálculo", value=date.today())
-            h_tribunal  = st.selectbox("⚖️ Tribunal",
-                                       ["TJMG (INPC/IPCAe)", "TJSP (Tabela Prática)"])
-        with hc2:
-            h_pct      = st.number_input("⚖️ Percentual de Honorário (%)",
-                                         min_value=0.0, max_value=100.0, value=20.0, step=0.5)
-            h_processo = st.text_input("📋 Número do Processo",
-                                       placeholder="0000000-00.0000.0.00.0000")
-            h_cliente  = st.text_input("👤 Cliente / Parte")
-            h_reu      = st.text_input("🏦 Réu / Executado")
-
-        h_calcular = st.form_submit_button("🧮 Calcular", type="primary", use_container_width=True)
-
-    if h_calcular:
-        if not has_indices:
-            st.error("⚠️ Atualize os índices antes de calcular.")
-        elif h_data_orig >= h_data_calc:
-            st.error("A data de origem deve ser anterior à data do cálculo.")
-        else:
-            # ── Correção monetária sem juros ──────────────────────────
-            is_tjsp_hon = "TJSP" in h_tribunal
-            if is_tjsp_hon:
-                valor_corrigido, corr_factor, meses_corr = calc_correcao_tjsp(
-                    h_valor, h_data_orig, h_data_calc, indices)
-                indice_label = "Tabela Prática TJSP"
-            else:
-                corr_factor = 1.0; meses_corr = 0; indice_usado = []
-                for year, month in iter_months(h_data_orig, h_data_calc):
-                    corr_factor *= 1.0 + get_correction_index(year, month, indices) / 100.0
-                    meses_corr  += 1
-                    indice_usado.append("INPC" if (year < 2024 or (year == 2024 and month <= 8)) else "IPCAe")
-                valor_corrigido = round(h_valor * corr_factor, 2)
-                indice_label = "INPC" if all(i == "INPC" for i in indice_usado) else \
-                               "IPCAe" if all(i == "IPCAe" for i in indice_usado) else "INPC/IPCAe"
-
-            variacao_pct    = round((corr_factor - 1.0) * 100, 4)
-            honorario_valor = round(valor_corrigido * h_pct / 100.0, 2)
-
-            # ── Exibição ──────────────────────────────────────────────
-            st.markdown("---")
-            if h_processo:
-                st.markdown(f"**Processo:** `{h_processo}`")
-            if h_cliente:
-                st.markdown(f"**Cliente:** {h_cliente}  |  **Réu:** {h_reu}")
-
-            rows_hon = [
-                ("Valor da Causa (original)",           fmt_brl(h_valor)),
-                (f"Índice de correção",                  indice_label),
-                (f"Período",                             f"{meses_corr} mês(es) — "
-                                                         f"{h_data_orig.strftime('%d/%m/%Y')} a "
-                                                         f"{h_data_calc.strftime('%d/%m/%Y')}"),
-                (f"Fator acumulado",                     f"{corr_factor:.6f} (+{variacao_pct:.4f}%)"),
-                ("( = ) Valor Corrigido",                fmt_brl(valor_corrigido)),
-                (f"( × ) Percentual de Honorário",       f"{h_pct:.2f}%"),
-                (f"( = ) Honorário Devido",              fmt_brl(honorario_valor)),
-            ]
-
-            # tabela HTML compacta
-            linhas_html = ""
-            for lbl, val in rows_hon:
-                is_dest = "Honorário Devido" in lbl or "Valor Corrigido" in lbl
-                peso    = "font-weight:700;" if is_dest else ""
-                cor     = "color:#4caf50;" if "Honorário Devido" in lbl else \
-                          "color:#90caf9;" if "Valor Corrigido" in lbl else ""
-                bg      = "background:rgba(76,175,80,.08);" if "Honorário Devido" in lbl else \
-                          "background:rgba(144,202,249,.06);" if "Valor Corrigido" in lbl else ""
-                linhas_html += (
-                    f"<tr style='{bg}'>"
-                    f"<td style='padding:6px 10px;font-size:13px;'>{lbl}</td>"
-                    f"<td style='padding:6px 10px;font-size:13px;{peso}{cor}text-align:right;'>{val}</td>"
-                    f"</tr>"
-                )
-            st.markdown(
-                f"""<table style='width:100%;border-collapse:collapse;
-                    border:1px solid #2d3748;border-radius:8px;overflow:hidden;'>
-                  <thead><tr style='background:#1e2533;'>
-                    <th style='padding:7px 10px;text-align:left;font-size:12px;color:#7986cb;'>Descrição</th>
-                    <th style='padding:7px 10px;text-align:right;font-size:12px;color:#7986cb;'>Valor</th>
-                  </tr></thead>
-                  <tbody>{linhas_html}</tbody>
-                </table>""",
-                unsafe_allow_html=True)
-
-            st.markdown("")
-            st.caption(
-                f"Correção: {indice_label} — sem juros de mora. "
-                f"Data-base: {h_data_calc.strftime('%d/%m/%Y')}.")
-
-            # ── Download PDF (reportlab) ───────────────────────────────
-            try:
-                from io import BytesIO as BIO
-                from reportlab.lib.pagesizes import A4
-                from reportlab.lib import colors
-                from reportlab.lib.units import cm
-                from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
-                                                Table, TableStyle)
-                from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-                from reportlab.lib.enums import TA_CENTER, TA_RIGHT
-
-                buf_pdf = BIO()
-                doc_rl  = SimpleDocTemplate(buf_pdf, pagesize=A4,
-                                            leftMargin=2*cm, rightMargin=2*cm,
-                                            topMargin=2*cm, bottomMargin=2*cm)
-                styles  = getSampleStyleSheet()
-                title_s = ParagraphStyle("tit", parent=styles["Title"],
-                                         fontSize=14, spaceAfter=4)
-                sub_s   = ParagraphStyle("sub", parent=styles["Normal"],
-                                         fontSize=9, textColor=colors.grey, spaceAfter=10)
-                body_s  = styles["Normal"]
-                note_s  = ParagraphStyle("note", parent=styles["Normal"],
-                                         fontSize=8, textColor=colors.grey, spaceBefore=10)
-
-                story = [
-                    Paragraph("Execução de Honorário", title_s),
-                    Paragraph(f"Data do cálculo: {h_data_calc.strftime('%d/%m/%Y')}", sub_s),
-                ]
-                if h_processo:
-                    story.append(Paragraph(f"<b>Processo:</b> {h_processo}", body_s))
-                if h_cliente:
-                    story.append(Paragraph(f"<b>Cliente:</b> {h_cliente}  |  <b>Réu:</b> {h_reu}", body_s))
-                story.append(Spacer(1, 12))
-
-                tbl_data = [["Descrição", "Valor"]]
-                for lbl, val in rows_hon:
-                    tbl_data.append([lbl, val])
-
-                tbl_rl = Table(tbl_data, colWidths=[12*cm, 5*cm])
-                tbl_style = TableStyle([
-                    ("BACKGROUND",  (0,0), (-1,0),  colors.HexColor("#1e2533")),
-                    ("TEXTCOLOR",   (0,0), (-1,0),  colors.white),
-                    ("FONTNAME",    (0,0), (-1,0),  "Helvetica-Bold"),
-                    ("FONTSIZE",    (0,0), (-1,-1), 9),
-                    ("ALIGN",       (1,0), (1,-1),  "RIGHT"),
-                    ("ROWBACKGROUNDS", (0,1), (-1,-1),
-                     [colors.HexColor("#f5f5f5"), colors.white]),
-                    ("GRID",        (0,0), (-1,-1), 0.5, colors.lightgrey),
-                    ("TOPPADDING",  (0,0), (-1,-1), 5),
-                    ("BOTTOMPADDING",(0,0),(-1,-1), 5),
-                ])
-                # destaca Valor Corrigido e Honorário Devido
-                for i, (lbl, _) in enumerate(rows_hon, start=1):
-                    if "Honorário Devido" in lbl:
-                        tbl_style.add("BACKGROUND", (0,i), (-1,i), colors.HexColor("#dcedc8"))
-                        tbl_style.add("FONTNAME",   (0,i), (-1,i), "Helvetica-Bold")
-                    elif "Valor Corrigido" in lbl:
-                        tbl_style.add("BACKGROUND", (0,i), (-1,i), colors.HexColor("#e3f2fd"))
-                        tbl_style.add("FONTNAME",   (0,i), (-1,i), "Helvetica-Bold")
-                tbl_rl.setStyle(tbl_style)
-                story.append(tbl_rl)
-                story.append(Paragraph(
-                    f"Correção: {indice_label} — sem juros de mora. "
-                    f"Data-base: {h_data_calc.strftime('%d/%m/%Y')}.", note_s))
-
-                doc_rl.build(story)
-                st.download_button(
-                    "🖨️ Baixar PDF", data=buf_pdf.getvalue(),
-                    file_name=f"honorario_{h_processo or 'calculo'}.pdf",
-                    mime="application/pdf",
-                    type="primary",
-                )
-            except Exception as e:
-                st.warning(f"Erro ao gerar PDF: {e}")
+# (bloco de Execução de Honorário movido para antes do upload — ver acima)
 
 # ──────────────────────────────────────────────────────────────
 # RODAPÉ
