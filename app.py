@@ -265,24 +265,87 @@ def fetch_bcb_series(serie_code: int, spinner_msg: str = "") -> dict:
     return _parse_bcb(resp.json())
 
 
+TJSP_INPC_URL  = "https://api.tjsp.jus.br/Handlers/Handler/FileFetch.ashx?codigo=189280"
+TJSP_14905_URL = "https://api.tjsp.jus.br/Handlers/Handler/FileFetch.ashx?codigo=189281"
+MES_MAP_PT = {"JAN":"01","FEV":"02","MAR":"03","ABR":"04","MAI":"05","JUN":"06",
+              "JUL":"07","AGO":"08","SET":"09","OUT":"10","NOV":"11","DEZ":"12"}
+
+
+def _parse_tjsp_pdf(pdf_bytes: bytes) -> dict:
+    """
+    Lê PDF da Tabela Prática TJSP e retorna dict {YYYY-MM: fator_acumulado}.
+    A correção entre dois meses é: fator_final / fator_inicial.
+    """
+    import io, re
+    try:
+        import pdfplumber
+    except ImportError:
+        return {}
+
+    fatores = {}
+    current_anos = []
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        for page in pdf.pages:
+            lines = (page.extract_text() or "").split("\n")
+            for line in lines:
+                spaced = re.findall(r'\b(\d)\s(\d)\s(\d)\s(\d)\b', line)
+                if len(spaced) >= 2:
+                    current_anos = ["".join(y) for y in spaced]
+                    continue
+                m = re.match(r'^\s*(JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ)\s+(.*)', line)
+                if m and current_anos:
+                    mes = m.group(1)
+                    nums = re.findall(r'[\d]{1,6}[,.][\d]{2,8}', m.group(2))
+                    for i, n in enumerate(nums):
+                        if i < len(current_anos):
+                            try:
+                                val = float(n.replace(",", "."))
+                                fatores[f"{current_anos[i]}-{MES_MAP_PT[mes]}"] = val
+                            except Exception:
+                                pass
+    return fatores
+
+
+def _fetch_tjsp_table(url: str) -> dict:
+    """Baixa PDF da Tabela Prática TJSP e retorna fatores acumulados."""
+    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.tjsp.jus.br/"}
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+    return _parse_tjsp_pdf(resp.content)
+
+
 def update_indices() -> dict:
-    """Busca INPC, IPCAe e Selic do BCB e salva localmente."""
+    """Busca INPC, IPCAe, Selic (BCB) e Tabela Prática TJSP."""
     progress = st.progress(0, text="Conectando ao Banco Central...")
     try:
         progress.progress(10, text="Buscando INPC (série 188)…")
         inpc = fetch_bcb_series(188)
 
-        progress.progress(45, text="Buscando IPCAe (série 10764)…")
+        progress.progress(35, text="Buscando IPCAe (série 10764)…")
         ipcae = fetch_bcb_series(10764)
 
-        progress.progress(75, text="Buscando Selic mensal (série 4390)…")
+        progress.progress(55, text="Buscando Selic mensal (série 4390)…")
         selic = fetch_bcb_series(4390)
 
-        progress.progress(95, text="Salvando localmente…")
+        progress.progress(70, text="Buscando Tabela Prática TJSP (INPC)…")
+        try:
+            tjsp_inpc = _fetch_tjsp_table(TJSP_INPC_URL)
+        except Exception:
+            tjsp_inpc = {}
+
+        progress.progress(90, text="Buscando Tabela TJSP (Lei 14.905/2024)…")
+        try:
+            tjsp_14905 = _fetch_tjsp_table(TJSP_14905_URL)
+        except Exception:
+            tjsp_14905 = {}
+
+        progress.progress(97, text="Salvando localmente…")
         indices = {
             "inpc": inpc,
             "ipcae": ipcae,
             "selic": selic,
+            "tjsp_inpc": tjsp_inpc,
+            "tjsp_14905": tjsp_14905,
             "ultima_atualizacao": datetime.now().strftime("%d/%m/%Y %H:%M"),
         }
         with open(INDICES_FILE, "w", encoding="utf-8") as f:
@@ -322,16 +385,48 @@ def iter_months(start: date, end: date):
         cy, cm = next_month(cy, cm)
 
 
-def get_correction_index(year: int, month: int, indices: dict) -> float:
-    """Retorna variação mensal (%) do índice de correção monetária."""
+def get_correction_index(year: int, month: int, indices: dict, tribunal: str = "TJMG") -> float:
+    """Retorna variação mensal (%) do índice de correção monetária.
+    Para TJSP, use get_tjsp_factor() — esta função retorna INPC/IPCAe (TJMG)."""
     key = month_key(year, month)
     if (year < 2024) or (year == 2024 and month <= 8):
         val = indices.get("inpc", {}).get(key)
-        label = "INPC"
     else:
         val = indices.get("ipcae", {}).get(key)
-        label = "IPCAe"
     return val if val is not None else 0.0
+
+
+def get_tjsp_factor(key: str, indices: dict) -> float | None:
+    """Retorna fator acumulado da Tabela Prática TJSP para YYYY-MM."""
+    # Até ago/2024: tabela INPC (antiga); a partir de set/2024: tabela Lei 14.905
+    y, m = int(key[:4]), int(key[5:7])
+    if (y < 2024) or (y == 2024 and m <= 8):
+        return indices.get("tjsp_inpc", {}).get(key)
+    else:
+        return indices.get("tjsp_14905", {}).get(key)
+
+
+def calc_correcao_tjsp(value: float, date_start: date, date_end: date, indices: dict) -> tuple:
+    """
+    Correção monetária TJSP via fatores acumulados.
+    Retorna (valor_corrigido, fator_total, meses).
+    Fórmula: valor × (fator_end / fator_start)
+    """
+    k_start = month_key(date_start.year, date_start.month)
+    k_end   = month_key(date_end.year,   date_end.month)
+    f_start = get_tjsp_factor(k_start, indices)
+    f_end   = get_tjsp_factor(k_end,   indices)
+    if f_start and f_end and f_start > 0:
+        fator = f_end / f_start
+        meses = sum(1 for _ in iter_months(date_start, date_end))
+        return round(value * fator, 2), round(fator, 6), meses
+    # fallback: usa INPC mês a mês
+    cf = 1.0
+    meses = 0
+    for y, m in iter_months(date_start, date_end):
+        cf *= 1.0 + get_correction_index(y, m, indices) / 100.0
+        meses += 1
+    return round(value * cf, 2), round(cf, 6), meses
 
 
 def get_interest_rate(year: int, month: int, indices: dict) -> float:
@@ -346,12 +441,12 @@ def get_interest_rate(year: int, month: int, indices: dict) -> float:
         return val if val is not None else 1.0  # fallback conservador
 
 
-def calculate_charge(value: float, date_charge: date, date_calc: date, indices: dict) -> dict:
+def calculate_charge(value: float, date_charge: date, date_calc: date, indices: dict,
+                     tribunal: str = "TJMG") -> dict:
     """
     Calcula correção monetária e juros simples para um lançamento.
-
-    Período: do mês da cobrança ao mês imediatamente anterior ao cálculo.
-    Juros: calculados sobre o débito corrigido (regime simples).
+    TJMG: INPC/IPCAe mês a mês.
+    TJSP: Tabela Prática TJSP (fatores acumulados) + juros simples.
     """
     if date_charge >= date_calc:
         return {
@@ -363,17 +458,27 @@ def calculate_charge(value: float, date_charge: date, date_calc: date, indices: 
             "months": 0,
         }
 
-    correction_factor = 1.0
-    total_interest_pct = 0.0
-    months_count = 0
+    is_tjsp = "TJSP" in tribunal
 
-    for year, month in iter_months(date_charge, date_calc):
-        idx = get_correction_index(year, month, indices)
-        correction_factor *= 1.0 + idx / 100.0
-        total_interest_pct += get_interest_rate(year, month, indices)
-        months_count += 1
+    if is_tjsp:
+        corrected, correction_factor, months_count = calc_correcao_tjsp(
+            value, date_charge, date_calc, indices)
+        # juros simples sobre débito corrigido (mesma regra)
+        total_interest_pct = sum(
+            get_interest_rate(y, m, indices)
+            for y, m in iter_months(date_charge, date_calc)
+        )
+    else:
+        correction_factor = 1.0
+        total_interest_pct = 0.0
+        months_count = 0
+        for year, month in iter_months(date_charge, date_calc):
+            idx = get_correction_index(year, month, indices)
+            correction_factor *= 1.0 + idx / 100.0
+            total_interest_pct += get_interest_rate(year, month, indices)
+            months_count += 1
+        corrected = value * correction_factor
 
-    corrected = value * correction_factor
     interest_value = corrected * total_interest_pct / 100.0
     total = corrected + interest_value
 
@@ -2152,7 +2257,7 @@ for i, charge in enumerate(st.session_state.charges):
 
     # Cálculo
     if v > 0 and has_indices:
-        res = calculate_charge(v, d, data_calculo, indices)
+        res = calculate_charge(v, d, data_calculo, indices, tribunal=tribunal)
     elif v > 0:
         res = {
             "corrected": v, "correction_factor": 1.0,
@@ -3101,6 +3206,8 @@ if IS_HONORARIO:
                 "📅 Data do Cálculo", value=date.today(),
                 help="Data-base do cálculo (hoje ou data da petição)."
             )
+            h_tribunal = st.selectbox("⚖️ Tribunal", ["TJMG (INPC)", "TJSP (Tabela Prática)"],
+                                      help="TJMG usa INPC/IPCAe; TJSP usa Tabela Prática do TJSP.")
         with hc2:
             h_pct = st.number_input(
                 "⚖️ Percentual de Honorário (%)", min_value=0.0, max_value=100.0,
@@ -3120,21 +3227,26 @@ if IS_HONORARIO:
             st.error("A data de origem deve ser anterior à data do cálculo.")
         else:
             # Correção monetária pura — sem juros
-            corr_factor = 1.0
-            meses_corr  = 0
-            indice_usado = []
-            for year, month in iter_months(h_data_orig, h_data_calc):
-                idx = get_correction_index(year, month, indices)
-                corr_factor *= 1.0 + idx / 100.0
-                meses_corr  += 1
-                label = "INPC" if (year < 2024 or (year == 2024 and month <= 8)) else "IPCAe"
-                indice_usado.append(label)
+            is_tjsp_hon = "TJSP" in h_tribunal
+            if is_tjsp_hon:
+                valor_corrigido, corr_factor, meses_corr = calc_correcao_tjsp(
+                    h_valor, h_data_orig, h_data_calc, indices)
+                indice_label = "Tabela Prática TJSP"
+            else:
+                corr_factor = 1.0
+                meses_corr  = 0
+                indice_usado = []
+                for year, month in iter_months(h_data_orig, h_data_calc):
+                    idx = get_correction_index(year, month, indices)
+                    corr_factor *= 1.0 + idx / 100.0
+                    meses_corr  += 1
+                    indice_usado.append("INPC" if (year < 2024 or (year == 2024 and month <= 8)) else "IPCAe")
+                valor_corrigido = round(h_valor * corr_factor, 2)
+                indice_label = "INPC" if all(i == "INPC" for i in indice_usado) else \
+                               "IPCAe" if all(i == "IPCAe" for i in indice_usado) else "INPC/IPCAe"
 
-            valor_corrigido = round(h_valor * corr_factor, 2)
             variacao_pct    = round((corr_factor - 1.0) * 100, 4)
             honorario_valor = round(valor_corrigido * h_pct / 100.0, 2)
-            indice_label    = "INPC" if all(i == "INPC" for i in indice_usado) else \
-                              "IPCAe" if all(i == "IPCAe" for i in indice_usado) else "INPC/IPCAe"
 
             st.success("✅ Cálculo realizado com sucesso!")
 
